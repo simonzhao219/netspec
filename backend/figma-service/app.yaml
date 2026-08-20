@@ -1,0 +1,54 @@
+# NOTE: FIGMA_REDIRECT_URI below is a PLACEHOLDER. Databricks assigns this
+# app its own hostname only once it's actually created as an App resource —
+# fill in the real one (and update the Figma OAuth app's registered redirect
+# URI to match) before this can work. FRONTEND_URL is unchanged from the
+# existing deployment — the OAuth callback always redirects back to the one
+# frontend regardless of which backend served it.
+command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+
+env:
+  - name: API_VERSION
+    value: "2025-04-01-preview"
+  - name: DEFAULT_MODEL
+    value: "claude-opus-4-6-2026V2"
+  - name: FIGMA_REDIRECT_URI
+    value: "<FILL IN: https://<this-app's-databricks-apps-hostname>/api/figma/oauth/callback>"
+  - name: FRONTEND_URL
+    value: "https://netspec-7474655518955982.aws.databricksapps.com"
+  - name: LLM_SOCRATIC
+    value: "gpt-5.4"
+  - name: LLM_ANALYZE
+    value: "gpt-5.4"
+  - name: LLM_EDGES
+    value: "gpt-5.4"
+  - name: LLM_PRD
+    value: "claude-opus-4-6-2026V2"
+  - name: DB_PATH
+    value: "/Volumes/ep_dev/default/netspec_data/netspec_figma.db"
+
+resources:
+  - name: API_BASE_URL
+    secret:
+      scope: netspec
+      key: api_base_url
+      permission: READ
+  - name: API_KEY
+    secret:
+      scope: netspec
+      key: api_key
+      permission: READ
+  - name: SECRET_KEY
+    secret:
+      scope: netspec
+      key: secret_key
+      permission: READ
+  - name: FIGMA_CLIENT_ID
+    secret:
+      scope: netspec
+      key: figma_client_id
+      permission: READ
+  - name: FIGMA_CLIENT_SECRET
+    secret:
+      scope: netspec
+      key: figma_client_secret
+      permission: READ

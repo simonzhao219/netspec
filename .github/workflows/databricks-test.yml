@@ -1,0 +1,31 @@
+name: Deploy Apps to Dev
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_DEV }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_DEV }}
+      EMAIL: ${{ secrets.DATABRICKS_WORKSPACE_EMAIL_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+
+      - name: Sync + deploy text-spec-service (netspec-backend)
+        run: |
+          databricks sync ./backend/text-spec-service /Workspace/Users/$EMAIL/netspec-backend --full
+          databricks apps deploy netspec-backend --source-code-path /Workspace/Users/$EMAIL/netspec-backend
+
+      - name: Sync + deploy figma-service (netspec-figma-backend)
+        run: |
+          databricks sync ./backend/figma-service /Workspace/Users/$EMAIL/netspec-figma-backend --full
+          databricks apps deploy netspec-figma-backend --source-code-path /Workspace/Users/$EMAIL/netspec-figma-backend
+
+      - name: Sync + deploy frontend (netspec)
+        run: |
+          databricks sync ./frontend /Workspace/Users/$EMAIL/netspec --full
+          databricks apps deploy netspec --source-code-path /Workspace/Users/$EMAIL/netspec

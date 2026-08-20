@@ -1,0 +1,15 @@
+command: ["/bin/bash", "start.sh"]
+
+env:
+  # BACKEND_URL is the back-compat alias for TEXT_SPEC_BACKEND_URL (see
+  # app/api/[...path]/route.ts) — kept as-is so the already-deployed
+  # text-spec-service URL doesn't need to change.
+  - name: BACKEND_URL
+    value: "https://netspec-backend-7474655518955982.aws.databricksapps.com"
+  # PLACEHOLDER — fill in with the real netspec-figma-backend App URL once
+  # that App is created (databricks apps get netspec-figma-backend), then
+  # redeploy this app for the change to take effect.
+  - name: FIGMA_BACKEND_URL
+    value: "<FILL IN: https://<netspec-figma-backend's-databricks-apps-hostname>>"
+  - name: NEXT_PUBLIC_SKIP_LANDING
+    value: "true"

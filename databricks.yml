@@ -1,0 +1,20 @@
+bundle:
+  name: my-project
+
+targets:
+  dev:
+    mode: development
+    workspace:
+      host: https://dbc-ad7011d8-b5f7.cloud.databricks.com/
+    permissions:
+      - level: CAN_MANAGE
+        service_principal_name: ${var.sp_name}
+
+resources:
+  jobs:
+    test_job:
+      name: test-job
+      tasks:
+        - task_key: main
+          notebook_task:
+            notebook_path: ./notebooks/main.py

@@ -1,0 +1,214 @@
+@import "tailwindcss";
+
+/* ── Theme variables — Astra visual language (light) ────────────────────────── */
+:root {
+  --background:              75 24% 95%;   /* paper #F3F5EF — faint warm-green canvas */
+  --foreground:              210 26% 8%;   /* ink text #10151B */
+  --card:                    0 0% 100%;
+  --card-foreground:         210 26% 8%;
+  --popover:                 0 0% 100%;
+  --popover-foreground:      210 26% 8%;
+  --primary:                 77 78% 48%;   /* deep chartreuse #A6DC1B (accent on light) */
+  --primary-foreground:      210 26% 8%;   /* dark text on lime */
+  --secondary:               80 22% 94%;
+  --secondary-foreground:    210 26% 8%;
+  --muted:                   80 22% 94%;
+  --muted-foreground:        210 8% 47%;   /* #6E7882 */
+  --accent:                  80 22% 94%;
+  --accent-foreground:       210 26% 8%;
+  --destructive:             8 74% 60%;    /* #E5604D */
+  --destructive-foreground:  0 0% 100%;
+  --border:                  75 16% 90%;   /* line #E7E9E1 */
+  --input:                   75 16% 90%;
+  --ring:                    77 78% 48%;
+  --radius:                  0.875rem;     /* squircle — larger radius */
+
+  /* ── Astra raw tokens (use directly in components) ── */
+  --ns-ink:        #0F1318;  --ns-ink-2:#171D24;  --ns-ink-3:#222932;
+  --ns-paper:      #F3F5EF;
+  --ns-accent:     #C5F23C;  --ns-accent-deep:#A6DC1B;  --ns-accent-soft:#EBF8C8;
+  --ns-violet:     #6B5CF0;  --ns-violet-soft:#ECEAFB;
+  --ns-text:       #10151B;  --ns-muted:#6E7882;  --ns-muted-2:#9AA3AD;
+  --ns-line:       #E7E9E1;  --ns-line-dark:#2A313A;
+  --ns-amber:      #E0982E;  --ns-amber-soft:#FBF1DE;  --ns-red:#E5604D;  --ns-red-soft:#FBE7E3;
+}
+
+/* ── Tailwind v4: map CSS variables to color utilities ──────────────────────── */
+@theme inline {
+  --color-background:              hsl(var(--background));
+  --color-foreground:              hsl(var(--foreground));
+  --color-card:                    hsl(var(--card));
+  --color-card-foreground:         hsl(var(--card-foreground));
+  --color-popover:                 hsl(var(--popover));
+  --color-popover-foreground:      hsl(var(--popover-foreground));
+  --color-primary:                 hsl(var(--primary));
+  --color-primary-foreground:      hsl(var(--primary-foreground));
+  --color-secondary:               hsl(var(--secondary));
+  --color-secondary-foreground:    hsl(var(--secondary-foreground));
+  --color-muted:                   hsl(var(--muted));
+  --color-muted-foreground:        hsl(var(--muted-foreground));
+  --color-accent:                  hsl(var(--accent));
+  --color-accent-foreground:       hsl(var(--accent-foreground));
+  --color-destructive:             hsl(var(--destructive));
+  --color-destructive-foreground:  hsl(var(--destructive-foreground));
+  --color-border:                  hsl(var(--border));
+  --color-input:                   hsl(var(--input));
+  --color-ring:                    hsl(var(--ring));
+
+  --font-sans: var(--font-jakarta), var(--font-noto-tc), -apple-system, system-ui, sans-serif;
+  --font-mono: var(--font-grotesk), ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius:    0.875rem;
+}
+
+/* ── Dark mode overrides ────────────────────────────────────────────────────── */
+.dark {
+  --background:              0 0% 0%;
+  --foreground:              0 0% 98%;
+  --card:                    0 0% 11%;
+  --card-foreground:         0 0% 98%;
+  --popover:                 0 0% 11%;
+  --popover-foreground:      0 0% 98%;
+  --primary:                 211 100% 60%;
+  --primary-foreground:      0 0% 0%;
+  --secondary:               0 0% 15%;
+  --secondary-foreground:    0 0% 98%;
+  --muted:                   0 0% 15%;
+  --muted-foreground:        0 0% 45%;
+  --accent:                  0 0% 15%;
+  --accent-foreground:       0 0% 98%;
+  --destructive:             4 86% 58%;
+  --destructive-foreground:  0 0% 100%;
+  --border:                  0 0% 18%;
+  --input:                   0 0% 18%;
+  --ring:                    211 100% 60%;
+}
+
+/* ── Base styles ────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  border-color: hsl(var(--border));
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+html {
+  font-family: var(--font-jakarta), var(--font-noto-tc), -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-jakarta), var(--font-noto-tc), -apple-system, system-ui, sans-serif;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  min-height: 100vh;
+}
+
+/* ── Thin 3px webkit scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 3px; height: 3px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: hsl(var(--border)); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+/* ── Focus ring ─────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.35);
+  border-radius: 4px;
+}
+
+/* ── Glass utility ──────────────────────────────────────────────────────────── */
+.glass {
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background-color: rgba(255, 255, 255, 0.8);
+  border: 1px solid hsl(var(--border));
+}
+
+.dark .glass {
+  background-color: rgba(0, 0, 0, 0.6);
+  border: 1px solid hsl(var(--border));
+}
+
+/* ── Story Markdown typography ──────────────────────────────────────────────── */
+.story-md {
+  color: #1d1d1f;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.story-md h1 { font-size: 16px; font-weight: 700; margin: 0 0 12px; color: #1d1d1f; letter-spacing: -0.01em; }
+.story-md h2 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #1d1d1f; }
+.story-md h3 { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: #1d1d1f; }
+.story-md p  { margin: 0 0 8px; }
+.story-md ul, .story-md ol { margin: 0 0 8px; padding-left: 18px; }
+.story-md li { margin-bottom: 3px; }
+.story-md li > p { margin: 0; }
+.story-md strong { font-weight: 600; color: #1d1d1f; }
+.story-md em     { font-style: italic; color: #3a3a3c; }
+.story-md code {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  background: rgba(0,0,0,0.05);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #6B5CF0;
+}
+.story-md pre {
+  background: rgba(0,0,0,0.03);
+  border: 1px solid rgba(0,0,0,0.07);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 8px 0 12px;
+}
+.story-md pre code {
+  background: transparent;
+  padding: 0;
+  color: #1d1d1f;
+  font-size: 12px;
+}
+.story-md blockquote {
+  border-left: 3px solid #6B5CF0;
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: #6e6e73;
+  background: rgba(107,92,240,0.04);
+  border-radius: 0 6px 6px 0;
+}
+.story-md hr {
+  border: none;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  margin: 14px 0;
+}
+/* GFM tables */
+.story-md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 10px 0 14px;
+}
+.story-md th {
+  background: rgba(0,0,0,0.04);
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 10px;
+  border: 1px solid rgba(0,0,0,0.08);
+  color: #1d1d1f;
+}
+.story-md td {
+  padding: 5px 10px;
+  border: 1px solid rgba(0,0,0,0.07);
+  vertical-align: top;
+  color: #3a3a3c;
+}
+.story-md tr:nth-child(even) td { background: rgba(0,0,0,0.015); }
+/* Checkbox list items (GFM task lists) */
+.story-md input[type="checkbox"] { margin-right: 6px; accent-color: #6B5CF0; }
+/* Remove bottom margin from last child */
+.story-md > *:last-child { margin-bottom: 0; }

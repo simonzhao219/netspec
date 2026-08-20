@@ -1,0 +1,43 @@
+command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+
+env:
+  - name: API_VERSION
+    value: "2025-04-01-preview"
+  - name: DEFAULT_MODEL
+    value: "claude-opus-4-6-2026V2"
+  - name: LLM_PARSE
+    value: "gpt-5.4"
+  - name: LLM_SOCRATIC
+    value: "gpt-5.4"
+  - name: LLM_PLAN
+    value: "gpt-5.4"
+  - name: LLM_ANALYZE
+    value: "gpt-5.4"
+  - name: LLM_EDGES
+    value: "gpt-5.4"
+  - name: LLM_PRD
+    value: "claude-opus-4-6-2026V2"
+  - name: LLM_VALIDATE
+    value: "gpt-5.4"
+  - name: LLM_TRANSLATE
+    value: "gpt-5.4"
+  - name: RATE_LIMIT_MODE
+    value: "api"
+  - name: DAILY_START_LIMIT
+    value: "30"
+  - name: DAILY_ITERATE_LIMIT
+    value: "60"
+  - name: DB_PATH
+    value: "/Volumes/ep_dev/default/netspec_data/netspec_text_spec.db"
+
+resources:
+  - name: API_BASE_URL
+    secret:
+      scope: netspec
+      key: api_base_url
+      permission: READ
+  - name: API_KEY
+    secret:
+      scope: netspec
+      key: api_key
+      permission: READ

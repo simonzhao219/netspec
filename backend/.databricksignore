@@ -1,0 +1,23 @@
+# 敏感資訊
+.env
+.env.*
+
+# Python 環境
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 資料庫
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+
+# 生成的輸出
+figma_output.json
+spec_*.md
+
+# Databricks CLI 快取
+.databricks/

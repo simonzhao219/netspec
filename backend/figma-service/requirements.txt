@@ -1,0 +1,13 @@
+cryptography>=42.0.0
+databricks-sdk>=0.20.0
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+openai==1.57.0
+langgraph==0.2.60
+langchain-core==0.3.25
+httpx==0.28.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+sse-starlette==2.1.3
+python-multipart==0.0.20

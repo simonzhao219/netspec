@@ -1,0 +1,53 @@
+services:
+  # 1. The Downloader (Runs first, then exits)
+  gemma4-downloader:
+    image: curlimages/curl:latest
+    container_name: gemma4-12b-downloader
+    user: root # Fixes the exit code 23 permission issue
+    volumes:
+      - ./models:/models
+    command: >
+      /bin/sh -c "
+      echo 'Downloading base model...' &&
+      curl -f -L -C - -# https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-UD-Q4_K_XL.gguf -o /models/gemma-4-12b-it-UD-Q4_K_XL.gguf &&
+      echo 'Downloading MTP draft model...' &&
+      curl -f -L -C - -# https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/mtp-gemma-4-12b-it.gguf -o /models/mtp-gemma-4-12b-it.gguf &&
+      echo 'Downloads complete!'
+      "
+
+  # 2. The Server (Waits for downloader, then runs natively)
+  gemma4-gguf:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    platform: linux/arm64
+    container_name: gemma4-12b-server
+    depends_on:
+      gemma4-downloader:
+        condition: service_completed_successfully
+    ports:
+      - "9991:9991"
+    volumes:
+      - /home/ep_gx10/.cache/huggingface:/root/.cache/huggingface
+      - ./models:/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    restart: unless-stopped
+    command: >
+      -m /models/gemma-4-12b-it-UD-Q4_K_XL.gguf
+      --model-draft /models/mtp-gemma-4-12b-it.gguf
+      --host 0.0.0.0
+      --port 9991
+      --alias gemma4-12b
+      --n-gpu-layers 99
+      -c 131072
+      --flash-attn on
+      --jinja
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
