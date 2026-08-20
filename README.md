@@ -28,6 +28,8 @@ NetSpec 是一個企業級 Agentic AI 平台，透過蘇格拉底式追問與社
 - **版本歷史** — 每次生成保存為快照，可隨時查閱舊版本
 
 **其他**
+- **App Telemetry** — 每個互動、每版規格產出、每次模型呼叫的成本都落到 Unity Catalog
+  （對應 SDCL PoC 的 Success Criteria #1／#2／#10，部署與驗收見 `doc/SDCL_telemetry_acceptance.md`）
 - **Phase 0 安全檢查** — 三層防護（敏感資訊遮蔽、攻擊攔截、Prompt Injection 移除）
 - **Per-step LLM 路由** — 每個 Pipeline 節點可獨立分配不同模型或 provider
 - **多 Provider 支援** — Azure Anthropic、Azure OpenAI、Databricks Model Serving、OpenAI、Ollama
@@ -51,7 +53,10 @@ netspec-app/
 ├── frontend/          # Next.js 16 + Tailwind v4 + shadcn/ui
 │   ├── app.yaml       # Databricks Apps 部署設定
 │   ├── app/api/[...path]/route.ts  # 依路徑分流到兩個後端
+│   ├── app/api/events/route.ts     # App telemetry ingest（身分從平台 header 取得）
+│   ├── lib/track.ts   # 前端唯一的 telemetry 介面
 │   └── start.sh       # Databricks 啟動腳本
+├── doc/               # SDCL PoC 文件 + 部署 runbook + Unity Catalog SQL
 └── skills/            # Socratic 題庫、安全規則
 ```
 
@@ -263,6 +268,45 @@ SQLite 需要的檔案鎖與隨機寫入。因此：
   `FIGMA_REDIRECT_URI` 完全一致），否則會 `redirect_uri mismatch`
 
 > 更名限制：App 名稱不可變，要改名只能建新 App + 部署 + 刪舊 App。
+
+---
+
+---
+
+## App Telemetry（SDCL PoC）
+
+NetSpec 的使用行為、規格產出與 AI 成本都會落到 Unity Catalog，供 Genie 與
+AI/BI dashboard 使用。對應 `doc/SDCL_telemetry.md` 的 Success Criteria
+**#1（App telemetry capture）**、**#2（App output data）**、**#10（AI cost visibility）**。
+
+```
+瀏覽器 track()  →  POST /api/events  →  平台注入的身分  →  stdout 一行 JSON
+                                                          →  Databricks Apps 自動匯出
+                                                          →  Unity Catalog otel_logs
+```
+
+- 前端唯一的埋點介面是 `frontend/lib/track.ts` 的 `track(eventName, properties)`
+  ——fire-and-forget、永不拋錯、永不擋 UI。
+- App 內**沒有任何認證程式碼**：使用者身分來自平台注入的 `X-Forwarded-Email`。
+- 需求全文與規格內文**不會**進到 log，`scrub()` 只保留長度、id 與列舉值。
+- 另有一條 env 開關控制的 Delta 直寫備援（預設關閉）。
+
+| 文件 | 內容 |
+|------|------|
+| `doc/SDCL_telemetry_deployment.md` | 一次性的 Unity Catalog 設定：建 schema、開 App telemetry、建 view |
+| `doc/SDCL_telemetry_acceptance.md` | **merge 之後怎麼部署、怎麼驗收**：部署順序、5 分鐘冒煙測試、逐條對應 Success Criteria 的驗收表、查不到資料時的排查流程 |
+| `doc/SDCL_telemetry_events.md` | 事件字典——每個 `event_name` 的意義與 properties |
+| `doc/sql/01_setup.sql` | Unity Catalog schema 與 typed table（含 Genie 需要的 comment）|
+| `doc/sql/02_bronze_from_otel.sql` | 從 `otel_logs` 還原成 typed columns |
+| `doc/sql/03_views.sql` | `v_app_events`／`v_spec_versions`／`v_ai_cost_by_stage`／`v_sessions` |
+| `doc/sql/04_verify.sql` | 逐條對應 Success Criteria 的驗收查詢 |
+
+快速健康檢查（不用寫 SQL）：
+
+```bash
+curl -s https://<backend-url>/api/health | jq .telemetry
+curl -s https://<frontend-url>/api/events
+```
 
 ---
 

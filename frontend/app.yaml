@@ -13,3 +13,21 @@ env:
     value: "<FILL IN: https://<netspec-figma-backend's-databricks-apps-hostname>>"
   - name: NEXT_PUBLIC_SKIP_LANDING
     value: "true"
+
+  # ── App telemetry (SDCL PoC — see doc/SDCL_telemetry_deployment.md) ─────────
+  # Primary path is stdout -> otel_logs and needs no configuration at all; it
+  # only requires App telemetry to be enabled on this App in the workspace UI.
+  #
+  # The two TELEMETRY_* values below turn on the OPTIONAL direct write into a
+  # typed Delta table. Both must be set for it to activate — leaving
+  # TELEMETRY_WAREHOUSE_ID empty keeps it off, which is the safe default.
+  - name: TELEMETRY_APP_NAME
+    value: "netspec"
+  - name: TELEMETRY_SERVICE_NAME
+    value: "frontend"
+  - name: TELEMETRY_TABLE
+    value: "ep_dev.netspec.app_events"
+  # FILL IN to enable the Delta sink: a SQL warehouse id this App's service
+  # principal has CAN_USE on (databricks warehouses list).
+  - name: TELEMETRY_WAREHOUSE_ID
+    value: ""

@@ -59,6 +59,32 @@ async function proxy(req: NextRequest, path: string[]) {
   if (ct) headers.set("content-type", ct);
   if (token) headers.set("authorization", `Bearer ${token}`);
 
+  // Relay the platform-injected identity so backend telemetry can attribute
+  // server-side events (pipeline steps, spec versions, token cost) to the human
+  // who triggered them. Without this the backends would only ever see whichever
+  // principal THIS hop authenticated as, not the logged-in user.
+  //
+  // Sent under PRIVATE header names, not by re-sending X-Forwarded-Email: the
+  // backend App has its own auth proxy in front of it, and that proxy sets the
+  // X-Forwarded-* headers itself for whoever authenticated this hop — the
+  // frontend's service principal whenever we fall back to the M2M token below.
+  // Re-sending the platform name would simply be overwritten. See
+  // RELAY_EMAIL_HEADER in backend/*/telemetry.py, which prefers these.
+  const relay: Record<string, string> = {
+    "x-forwarded-email": "x-netspec-user-email",
+    "x-forwarded-user": "x-netspec-user-id",
+  };
+  for (const [from, to] of Object.entries(relay)) {
+    const v = req.headers.get(from);
+    if (v) headers.set(to, v);
+  }
+  // Passed through under their own names — the platform does not rewrite these
+  // and they are only ever read for correlation.
+  for (const h of ["x-forwarded-preferred-username", "x-request-id"]) {
+    const v = req.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+
   const hasBody = !["GET", "HEAD"].includes(req.method);
   const upstream = await fetch(target, {
     method: req.method,

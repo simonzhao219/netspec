@@ -10,6 +10,7 @@ import FigmaStoryPanel from "@/components/panels/FigmaStoryPanel";
 import FigmaMonitorPanel from "@/components/panels/FigmaMonitorPanel";
 import LandingPage from "@/components/LandingPage";
 import type { FigmaFrameListResult } from "@/lib/api";
+import { track, setWorkflow } from "@/lib/track";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ArrowRight, BookText, Layers, MessageCircle, ListChecks } from "lucide-react";
 
@@ -678,6 +679,18 @@ export default function Home() {
     activeStep <= 2 &&
     activeStep > 0;
 
+  // One page_view per mount, and keep the ambient workflow tag in sync so every
+  // later event says which half of the product it came from.
+  useEffect(() => {
+    track("page_view", { view: showLanding ? "landing" : "app", workflow: workflowMode });
+    // Intentionally mount-only: this is the arrival event, not a re-render event.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    setWorkflow(workflowMode);
+  }, [workflowMode]);
+
   // Auto-collapse the sidebar (→ overlay) when the viewport gets narrow.
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1100px)");
@@ -695,6 +708,7 @@ export default function Home() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("figma_connected") === "1") {
+      track("figma_oauth_returned", { connected: true });
       setWorkflowMode("figma");
       setCurrentPanel("input");
     }
@@ -740,6 +754,13 @@ export default function Home() {
 
   const handleExportMd = () => {
     if (!result?.spec_document) return;
+    // Exporting is the strongest signal a spec was actually useful to someone.
+    track("spec_exported", {
+      format: "md",
+      iteration: currentIteration,
+      chars: result.spec_document.length,
+      quality_score: result.validation_score ?? null,
+    });
     const blob = new Blob([result.spec_document], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -752,11 +773,15 @@ export default function Home() {
   };
 
   const handleWorkflowModeChange = (mode: "text" | "figma") => {
+    track("workflow_switched", { from: workflowMode, to: mode });
     setWorkflowMode(mode);
     setCurrentPanel("input");
   };
 
   const handlePanelChange = (panel: string) => {
+    // Which panels users actually open — and which they never do — is the
+    // "which features go unused" question the PoC is meant to answer.
+    track("panel_viewed", { panel, from: currentPanel, workflow: workflowMode });
     setCurrentPanel(panel as PanelId);
   };
 
@@ -765,10 +790,12 @@ export default function Home() {
   };
 
   const handleFigmaLoaded = (fileKey: string, fileName: string, frames: FigmaFrameListResult["frames"]) => {
+    track("figma_frames_loaded", { file_key: fileKey, frame_count: frames.length });
     setFigmaData({ fileKey, fileName, frames });
   };
 
   const handleStartStory = (fileKey: string, fileName: string, frames: FigmaFrameListResult["frames"]) => {
+    track("figma_story_started", { file_key: fileKey, frame_count: frames.length });
     setFigmaData({ fileKey, fileName, frames });
     setLoadedFigmaId(null);   // fresh generation, not a history view
     setCurrentPanel("story");
@@ -802,6 +829,12 @@ export default function Home() {
       setLoadedFigmaId(sessionId);
       setWorkflowMode("figma");
       setCurrentPanel("story");
+      track("figma_history_opened", {
+        version_count: versions.length,
+        version_num: v.version_num,
+        role_count: (v.roles ?? []).length,
+        feature_count: (v.features ?? []).length,
+      });
     } catch { /* ignore */ }
   };
 
@@ -823,7 +856,7 @@ export default function Home() {
       onLoadFigmaHistory={(id) => { handleLoadFigmaHistory(id); setMobileSidebarOpen(false); }}
       loadedFigmaId={loadedFigmaId}
       onResetToHome={() => { resetToHome(); setCurrentPanel("input"); setMobileSidebarOpen(false); }}
-      onGoLanding={() => { setShowLanding(true); setMobileSidebarOpen(false); }}
+      onGoLanding={() => { track("landing_opened", { from: currentPanel }); setShowLanding(true); setMobileSidebarOpen(false); }}
       loadedHistoryId={loadedHistoryId}
       stepsCompleted={stepsCompleted}
       status={status}
@@ -833,7 +866,7 @@ export default function Home() {
   return (
     <>
       {showLanding ? (
-        <LandingPage onEnter={() => setShowLanding(false)} />
+        <LandingPage onEnter={() => { track("landing_entered"); setShowLanding(false); }} />
       ) : (
         <div className="flex overflow-hidden" style={{ height: "100dvh" }}>
       {/* ── Sidebar: inline when wide; overlay drawer when narrow ── */}

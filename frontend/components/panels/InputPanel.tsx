@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useNetSpec } from "@/hooks/useNetSpec";
 import { listFigmaFrames, getFigmaOAuthStatus, disconnectFigma } from "@/lib/api";
 import type { FigmaFrameListResult } from "@/lib/api";
+import { track } from "@/lib/track";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -198,10 +199,12 @@ export default function InputPanel({
   }, [inputMode]);
 
   const handleOAuthConnect = () => {
+    track("figma_oauth_connect_clicked");
     window.location.href = "/api/figma/oauth/start";
   };
 
   const handleOAuthDisconnect = async () => {
+    track("figma_oauth_disconnected");
     await disconnectFigma();
     setOauthStatus({ connected: false });
   };
@@ -217,6 +220,8 @@ export default function InputPanel({
     if (!figmaUrl.trim()) return;
     setListLoading(true);
     setFigmaError(null);
+    track("figma_list_frames_clicked", { force_refresh: forceRefresh });
+    const startedAt = Date.now();
     try {
       const result = await listFigmaFrames(figmaUrl.trim(), forceRefresh);
       setFigmaFrameList(result);
@@ -225,6 +230,11 @@ export default function InputPanel({
       onFigmaLoaded?.(result.file_key, result.file_name, result.frames);
     } catch (e: any) {
       setFigmaError(e.message ?? "無法取得 Frame 列表，請確認連結正確");
+      track("figma_list_frames_failed", {
+        force_refresh: forceRefresh,
+        duration_ms: Date.now() - startedAt,
+        message: e?.message,
+      });
     } finally {
       setListLoading(false);
     }
@@ -235,6 +245,12 @@ export default function InputPanel({
       const next = new Set(prev);
       if (next.has(frameId)) next.delete(frameId);
       else next.add(frameId);
+      track("figma_frame_selected", {
+        frame_id: frameId,
+        selected: next.has(frameId),
+        selected_count: next.size,
+        via: "list",
+      });
       return next;
     });
   };
@@ -242,11 +258,14 @@ export default function InputPanel({
   const handleToggleAll = () => {
     if (!figmaFrameList) return;
     const allIds = figmaFrameList.frames.map(f => f.frame_id);
-    if (selectedFrameIds.size === allIds.length) setSelectedFrameIds(new Set());
-    else setSelectedFrameIds(new Set(allIds));
+    const selectingAll = selectedFrameIds.size !== allIds.length;
+    track("figma_frames_toggle_all", { selecting_all: selectingAll, frame_count: allIds.length });
+    if (selectingAll) setSelectedFrameIds(new Set(allIds));
+    else setSelectedFrameIds(new Set());
   };
 
   const handleFigmaReset = () => {
+    track("figma_input_reset", { had_frames: Boolean(figmaFrameList) });
     setFigmaStep("url");
     setFigmaFrameList(null);
     setSelectedFrameIds(new Set());
@@ -315,12 +334,19 @@ export default function InputPanel({
   };
 
   const handleQuickFill = (text: string) => {
+    // Using a canned example instead of writing a requirement is itself a signal —
+    // it usually means the user didn't know what to type.
+    track("example_requirement_used", { requirement_chars: text.length });
     setReq(text);
     textareaRef.current?.focus();
   };
 
   const handleStart = () => {
-    if (canStart) onStart(req.trim(), detailLevel);
+    if (!canStart) {
+      track("start_blocked", { requirement_chars: req.trim().length, detail_level: detailLevel });
+      return;
+    }
+    onStart(req.trim(), detailLevel);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -612,6 +638,11 @@ export default function InputPanel({
                     if (figmaFrameList) {
                       const selected = figmaFrameList.frames.filter(f => selectedFrameIds.has(f.frame_id));
                       const frames = selected.length > 0 ? selected : figmaFrameList.frames;
+                      track("generate_story_clicked", {
+                        file_key: figmaFrameList.file_key,
+                        frame_count: frames.length,
+                        used_all_frames: selected.length === 0,
+                      });
                       onStartStory?.(figmaFrameList.file_key, figmaFrameList.file_name, frames);
                     }
                   }}
@@ -1015,7 +1046,7 @@ export default function InputPanel({
                   key={v}
                   type="button"
                   title={tip}
-                  onClick={() => setDetailLevel(v)}
+                  onClick={() => { track("detail_level_changed", { from: detailLevel, to: v }); setDetailLevel(v); }}
                   className="text-[13.5px] font-bold rounded-[9px] transition-all select-none"
                   style={{
                     padding: "8px 22px",

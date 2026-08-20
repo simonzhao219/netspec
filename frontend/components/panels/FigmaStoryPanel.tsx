@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { ChevronRight, Copy, Check, Pencil, Loader2, AlertTriangle, Database, Download, FilePlus2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { track, setAppSession } from "@/lib/track";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -767,6 +768,12 @@ export default function FigmaStoryPanel({
   const startPipeline = async (force = false) => {
     if (selectedIds.size === 0) return;
     onNodeEvent?.("pipeline_start", {});
+    track("figma_pipeline_start_clicked", {
+      file_key: fileKey,
+      frame_count: selectedIds.size,
+      force_regenerate: force,
+      description_chars: userDesc.length,
+    });
     setError(null);
     setCompletedRounds([]);
     setCurrentRound(null);
@@ -790,11 +797,15 @@ export default function FigmaStoryPanel({
       });
       if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { detail?: string }).detail ?? "啟動失敗");
       const { thread_id } = await res.json();
+      // Bind subsequent clicks to the Figma pipeline session, the same way the
+      // text workflow binds to its NetSpec session — that's the join key.
+      setAppSession(thread_id);
       setThreadId(thread_id);
       openSSE(thread_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
+      track("figma_pipeline_start_failed", { message: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -803,6 +814,11 @@ export default function FigmaStoryPanel({
   const submitAnswers = async (proceed: boolean) => {
     if (!threadId || !currentRound) return;
     onNodeEvent?.("user_answered", {});
+    track(proceed ? "figma_questions_skipped" : "figma_questions_submitted", {
+      round: completedRounds.length + 1,
+      question_count: currentRound.questions?.length ?? 0,
+      answered_count: Object.values(pendingAnswers ?? {}).filter(v => String(v ?? "").trim() !== "").length,
+    });
     setSubmitting(true);
     setCompletedRounds(prev => [...prev, { ...currentRound, answers: pendingAnswers }]);
     setCurrentRound(null);
@@ -827,6 +843,14 @@ export default function FigmaStoryPanel({
   const confirmFeatures = async () => {
     if (!threadId || confirmedIds.size === 0) return;
     const confirmed = features.filter(f => confirmedIds.has(f.id));
+    // How many AI-extracted features the user throws away is the quality signal
+    // for the feature-extraction step.
+    track("figma_features_confirm_clicked", {
+      confirmed_count: confirmed.length,
+      suggested_count: features.length,
+      dropped_count: features.length - confirmed.length,
+      supplement_chars: supplement.length,
+    });
     onNodeEvent?.("user_confirmed", {
       features: confirmed as unknown as Record<string, unknown>[],
       roles: ["PM"] as unknown as Record<string, unknown>[],
@@ -881,6 +905,10 @@ export default function FigmaStoryPanel({
       } else {
         next.add(key);
       }
+      track("figma_story_confirmed", {
+        feature_id: featureId, role, confirmed: next.has(key),
+        confirmed_total: next.size,
+      });
       return next;
     });
     setSavedToDb(false);
@@ -925,9 +953,17 @@ export default function FigmaStoryPanel({
       const data = await res.json().catch(() => ({}));
       if (typeof data.version_num === "number") setVersionNum(data.version_num);
       setSavedToDb(true);
+      track("figma_story_version_saved", {
+        cache_key: cacheKey,
+        version_num: data.version_num ?? null,
+        feature_count: confirmedFeatures.length,
+        story_count: buildStoryItems().length,
+        mode: "new_version",
+      });
       window.dispatchEvent(new Event("figma-history-changed"));
     } catch (e) {
       setSaveDbError(e instanceof Error ? e.message : String(e));
+      track("figma_story_save_failed", { mode: "new_version", message: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
     }
@@ -946,9 +982,17 @@ export default function FigmaStoryPanel({
       });
       if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { detail?: string }).detail ?? "儲存失敗");
       setSavedToDb(true);
+      track("figma_story_version_saved", {
+        cache_key: cacheKey,
+        version_num: versionNum,
+        feature_count: confirmedFeatures.length,
+        story_count: buildStoryItems().length,
+        mode: "edit_in_place",
+      });
       window.dispatchEvent(new Event("figma-history-changed"));
     } catch (e) {
       setSaveDbError(e instanceof Error ? e.message : String(e));
+      track("figma_story_save_failed", { mode: "edit_in_place", message: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
     }

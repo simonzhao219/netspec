@@ -13,6 +13,7 @@ import {
   type FigmaMonitor, type FigmaMonitorDiff, type FigmaMonitorCheckHistoryItem,
   type FigmaFrame, type TeamsWebhook, type FigmaMonitorBatchCheckResult,
 } from "@/lib/api";
+import { track } from "@/lib/track";
 
 /* ─── helpers ── */
 
@@ -161,11 +162,19 @@ function MonitorCard({ monitor, webhooks, onChanged }: {
     try {
       const res = await checkFigmaMonitor(monitor.id);
       setLastResult({ isFirstCheck: res.is_first_check, diff: res.diff });
+      const d = res.diff;
+      track("monitor_check_run", {
+        monitor_id: monitor.id,
+        mode: "single",
+        is_first_check: res.is_first_check,
+        changed: Boolean(d && (d.added.length + d.removed.length + d.modified.length) > 0),
+      });
       if (!expanded) setExpanded(true);
       await loadHistory();
       onChanged();
     } catch (e: any) {
       setCheckError(e?.message || "比對失敗");
+      track("monitor_check_failed", { monitor_id: monitor.id, mode: "single", message: e?.message });
     } finally {
       setChecking(false);
     }
@@ -173,6 +182,7 @@ function MonitorCard({ monitor, webhooks, onChanged }: {
 
   const runDelete = async () => {
     setDeleting(true);
+    track("monitor_deleted", { monitor_id: monitor.id });
     try { await deleteFigmaMonitor(monitor.id); onChanged(); }
     finally { setDeleting(false); }
   };
@@ -184,9 +194,11 @@ function MonitorCard({ monitor, webhooks, onChanged }: {
     try {
       await notifyFigmaMonitor(monitor.id);
       setNotifyResult("sent");
+      track("monitor_teams_notified", { monitor_id: monitor.id, ok: true });
     } catch (e: any) {
       setNotifyResult("error");
       setNotifyError(e?.message || "發送失敗");
+      track("monitor_teams_notified", { monitor_id: monitor.id, ok: false, message: e?.message });
     } finally {
       setNotifying(false);
     }
@@ -365,8 +377,10 @@ function CreateMonitorModal({ webhooks, onClose, onCreated }: {
       setFileName(result.file_name);
       setFrames(result.frames);
       setSelectedIds(new Set());
+      track("monitor_file_parsed", { file_key: result.file_key, frame_count: result.frames.length });
     } catch (e: any) {
       setParseError(e?.message || "解析失敗，請確認連結是否正確");
+      track("monitor_file_parse_failed", { message: e?.message });
     } finally {
       setParsing(false);
     }
@@ -391,6 +405,11 @@ function CreateMonitorModal({ webhooks, onClose, onCreated }: {
         custom_name: customName.trim(), file_key: fileKey, file_name: fileName,
         frame_ids: chosen.map(f => f.frame_id), frame_names: chosen.map(f => f.frame_name),
         teams_webhook_id: webhookId || undefined,
+      });
+      track("monitor_created", {
+        file_key: fileKey,
+        frame_count: chosen.length,
+        has_teams_webhook: Boolean(webhookId),
       });
       onCreated(); // refresh the monitors list in the background — modal stays open
       setUsedFrameIds(prev => new Set([...prev, ...chosen.map(f => f.frame_id)]));
@@ -722,8 +741,12 @@ export default function FigmaMonitorPanel() {
       const changed = results.filter(r => !r.error && r.diff &&
         (r.diff.added.length + r.diff.removed.length + r.diff.modified.length) > 0);
       setBatchSummary({ total: results.length, errors: errors.length, changed: changed.length, firstError: errors[0]?.error });
+      track("monitor_check_run", {
+        mode: "all", total: results.length, error_count: errors.length, changed_count: changed.length,
+      });
     } catch (e: any) {
       setBatchSummary({ total: 0, errors: 1, changed: 0, firstError: e?.message || "批次比對失敗" });
+      track("monitor_check_failed", { mode: "all", message: e?.message });
     } finally {
       setCheckingAll(false);
       refresh();

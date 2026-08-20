@@ -218,7 +218,10 @@ function CurrentSessionCard({ iterations, currentIteration, onLoadIteration }: {
             idx={idx}
             allIters={iterations}
             isCurrent={iter.iteration === currentIteration}
-            onClick={() => onLoadIteration(iter.iteration)}
+            onClick={() => {
+              track("version_switched", { to_iteration: iter.iteration, from_iteration: currentIteration });
+              onLoadIteration(iter.iteration);
+            }}
           />
         ))}
       </div>
@@ -331,6 +334,7 @@ type HistIter = { iteration_num: number; quality_score: number; created_at: numb
 type FigmaVer = { version_num: number; created_at: number; label: string; feature_count: number };
 
 import { useNetSpec } from "@/hooks/useNetSpec";
+import { track } from "@/lib/track";
 
 export default function AppSidebar({
   currentPanel, onPanelChange,
@@ -399,6 +403,7 @@ export default function AppSidebar({
   const deleteSelected = async () => {
     if (!selected.size) return;
     setDeleting(true);
+    track("history_deleted", { count: selected.size, mode: "bulk" });
     try {
       await Promise.all([...selected].map(id =>
         fetch(deleteEndpoint(id), { method: "DELETE" })
@@ -409,7 +414,14 @@ export default function AppSidebar({
 
   const deleteSingle = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("確定刪除這筆記錄？")) return;
+    if (!confirm("確定刪除這筆記錄？")) {
+      track("history_delete_cancelled", { mode: "single" });
+      return;
+    }
+    track("history_deleted", {
+      count: 1, mode: "single",
+      kind: dbHistory.find(r => r.id === id)?.kind ?? "unknown",
+    });
     await fetch(deleteEndpoint(id), { method: "DELETE" });
     refreshHistory();
   };
@@ -452,7 +464,13 @@ export default function AppSidebar({
       <button type="button"
         onClick={() => {
           if (status === "running") {
-            if (!confirm("正在執行中，確定要回到首頁嗎？（分析會在背景保留）")) return;
+            // Walking out mid-run is the abandonment signal the PoC is after —
+            // record both the intent and whether they went through with it.
+            if (!confirm("正在執行中，確定要回到首頁嗎？（分析會在背景保留）")) {
+              track("leave_while_running_cancelled", { steps_completed: stepsCompleted });
+              return;
+            }
+            track("left_while_running", { steps_completed: stepsCompleted });
           }
           onGoLanding();
         }}

@@ -26,6 +26,7 @@ import db as _db
 import figma as _figma
 import figma_story as _figma_story
 import figma_story_graph as _fsg
+import telemetry
 from config import get_settings
 from sse_session import Session
 from db import (
@@ -47,6 +48,56 @@ from db import (
 router = APIRouter(prefix="/api")
 
 FIGMA_SESSIONS: dict[str, Session] = {}
+
+
+# ── Telemetry helpers ─────────────────────────────────────────────────────────
+# Mirrors text-spec-service/router.py: one place that attaches the join keys
+# (app_session_id, user_email) so no call site can forget them.
+
+def _emit(session: Optional[Session], event_name: str, *, duration_ms: int | None = None,
+          properties: dict | None = None, event_type: str = "server_event") -> None:
+    telemetry.track(
+        event_name,
+        event_type=event_type,
+        app_session_id=session.id if session else None,
+        user_email=session.user_email if session else None,
+        user_id=session.user_id if session else None,
+        workflow="figma",
+        duration_ms=duration_ms,
+        properties=properties or {},
+    )
+
+
+def _emit_request(request: Request, event_name: str, *, duration_ms: int | None = None,
+                  properties: dict | None = None, event_type: str = "server_event") -> None:
+    """For endpoints with no pipeline session — attribute straight from the request."""
+    ident = telemetry.identity_from(request)
+    telemetry.track(
+        event_name,
+        event_type=event_type,
+        workflow="figma",
+        user_email=ident.get("user_email"),
+        user_id=ident.get("user_id"),
+        request_id=ident.get("request_id"),
+        duration_ms=duration_ms,
+        properties=properties or {},
+    )
+
+
+def _llm_context(request: Request):
+    """Bind who is asking, for endpoints that call a model without a pipeline session.
+
+    The LangGraph pipeline binds app_session_id through :func:`_stream_figma_pipeline`;
+    these legacy per-request endpoints have no session to bind, but the llm_call
+    cost events they trigger still have to name a user and a workflow — otherwise
+    that spend lands in v_ai_cost_by_stage with every join key null.
+    """
+    ident = telemetry.identity_from(request)
+    return telemetry.bind_context(
+        user_email=ident.get("user_email"),
+        user_id=ident.get("user_id"),
+        workflow="figma",
+    )
 
 
 def _get_cached_frames(file_key: str) -> list[dict]:
@@ -210,7 +261,7 @@ class FigmaMonitorCreateRequest(BaseModel):
 
 
 @router.post("/figma/monitors")
-async def create_figma_monitor_endpoint(body: FigmaMonitorCreateRequest) -> dict:
+async def create_figma_monitor_endpoint(request: Request, body: FigmaMonitorCreateRequest) -> dict:
     name = body.custom_name.strip()
     if not name:
         raise HTTPException(400, "請輸入監控名稱")
@@ -252,6 +303,13 @@ async def create_figma_monitor_endpoint(body: FigmaMonitorCreateRequest) -> dict
         add_figma_monitor_check(monitor_id, snapshot, None)
         monitor = get_figma_monitor(monitor_id) or monitor
 
+    _emit_request(request, "figma_monitor_created", properties={
+        "monitor_id": monitor_id,
+        "file_key": body.file_key,
+        "frame_count": len(body.frame_ids or []),
+        "has_teams_webhook": bool(webhook_id),
+        "baseline_established": bool(snapshot),
+    })
     return monitor
 
 
@@ -318,7 +376,7 @@ async def list_figma_monitor_checks_endpoint(monitor_id: str) -> list:
 
 
 @router.post("/figma/monitors/{monitor_id}/check")
-async def check_figma_monitor_endpoint(monitor_id: str) -> dict:
+async def check_figma_monitor_endpoint(request: Request, monitor_id: str) -> dict:
     """Manual trigger: fetch current frame state, diff vs the last check,
     record it as new history. First-ever check just establishes the baseline
     (no diff to show yet)."""
@@ -338,6 +396,18 @@ async def check_figma_monitor_endpoint(monitor_id: str) -> dict:
     diff = None if is_first_check else _figma.diff_frame_snapshots(prev["snapshot"], new_snapshot)
 
     check = add_figma_monitor_check(monitor_id, new_snapshot, diff)
+    # A design change detected here is the upstream signal for "why did this
+    # spec need re-work?" — recorded as app output, not just a click.
+    _emit_request(request, "figma_monitor_checked", event_type="app_output", properties={
+        "monitor_id": monitor_id,
+        "file_key": monitor["file_key"],
+        "frame_count": len(monitor.get("frame_ids") or []),
+        "is_first_check": is_first_check,
+        "changed": bool(diff and (diff.get("added") or diff.get("removed") or diff.get("modified"))),
+        "added_count": len((diff or {}).get("added") or []),
+        "removed_count": len((diff or {}).get("removed") or []),
+        "modified_count": len((diff or {}).get("modified") or []),
+    })
     return {
         "checked_at":     check["checked_at"],
         "is_first_check": is_first_check,
@@ -528,7 +598,7 @@ async def figma_raw(body: FigmaListRequest):
         raise _figma_exception_to_http(e, file_key=file_key)
 
 @router.post("/figma/list-frames")
-async def figma_list_frames(body: FigmaListRequest):
+async def figma_list_frames(request: Request, body: FigmaListRequest):
     start = time.time()
     try:
         parsed = _figma.fetch_and_parse(
@@ -542,6 +612,9 @@ async def figma_list_frames(body: FigmaListRequest):
         raise _figma_exception_to_http(e, file_key=file_key)
 
     if not parsed["frames"]:
+        _emit_request(request, "figma_file_loaded", properties={
+            "file_key": parsed.get("file_key", ""), "frame_count": 0, "empty": True,
+        })
         raise HTTPException(422, "此 Figma 檔案沒有找到任何 Frame，請確認分享連結正確且含有設計內容。")
 
     # Fetch comments on first load (synchronous, paid once per file_key).
@@ -555,6 +628,14 @@ async def figma_list_frames(body: FigmaListRequest):
             save_figma_comments(file_key, cached_comments)
         except Exception:
             cached_comments = None  # non-critical; pipeline still works without comments
+    _emit_request(request, "figma_file_loaded",
+                  duration_ms=int((time.time() - start) * 1000),
+                  properties={
+                      "file_key": file_key,
+                      "frame_count": len(parsed["frames"]),
+                      "force_refresh": body.force_refresh,
+                      "comment_count": len(cached_comments) if cached_comments is not None else None,
+                  })
     return {
         "file_name": parsed["file_name"],
         "file_key": file_key,
@@ -658,7 +739,7 @@ class FigmaStoryEditRequest(BaseModel):
 
 
 @router.post("/figma/story/question")
-async def figma_story_question(body: FigmaStoryQuestionRequest):
+async def figma_story_question(request: Request, body: FigmaStoryQuestionRequest):
     """AI 追問（多輪）：根據 Frame、使用者說明、歷史問答，生成 2-3 個追問。最多 3 輪。"""
     if len(body.history) >= 3:
         raise HTTPException(400, "已達追問上限（3 輪），請直接進行生成。")
@@ -667,11 +748,16 @@ async def figma_story_question(body: FigmaStoryQuestionRequest):
         frames = _figma_story.collect_frames(all_frames, body.frame_ids)
         if not frames:
             raise HTTPException(422, "找不到選取的 Frame，請重新選擇。")
-        questions = _figma_story.generate_questions(
-            frames=frames,
-            user_description=body.user_description,
-            history=body.history,
-        )
+        # This legacy path has no pipeline session, so there is no app_session_id
+        # to bind — but the user and workflow still have to reach the llm_call
+        # cost event, or this spend shows up in v_ai_cost_by_stage attributed to
+        # nobody. See _llm_context.
+        with _llm_context(request):
+            questions = _figma_story.generate_questions(
+                frames=frames,
+                user_description=body.user_description,
+                history=body.history,
+            )
         return {"questions": questions, "round": len(body.history) + 1}
     except HTTPException:
         raise
@@ -680,7 +766,7 @@ async def figma_story_question(body: FigmaStoryQuestionRequest):
 
 
 @router.post("/figma/story/stream")
-async def figma_story_stream(body: FigmaStoryStreamRequest):
+async def figma_story_stream(request: Request, body: FigmaStoryStreamRequest):
     """Story 生成 SSE：逐角色生成，每完成一個立即推送，同時存入 DB。"""
     invalid = [r for r in body.roles if r not in _figma_story.VALID_ROLES]
     if invalid:
@@ -693,19 +779,27 @@ async def figma_story_stream(body: FigmaStoryStreamRequest):
 
     cache_key = _figma_story.story_cache_key(body.file_key, body.frame_ids)
 
+    # Resolved here, while the request headers still exist: the generator below
+    # runs after this handler has returned, so it cannot read them itself.
+    ident = telemetry.identity_from(request)
+
     async def event_generator():
         yield {"event": "progress", "data": json.dumps({"step": "start", "roles": body.roles}, ensure_ascii=False)}
         for role in body.roles:
             yield {"event": "progress", "data": json.dumps({"step": "generating", "role": role}, ensure_ascii=False)}
             try:
-                story_text = await asyncio.to_thread(
-                    _figma_story.generate_story_for_role,
-                    frames,
-                    role,
-                    body.user_description,
-                    body.history,
-                    body.final_supplement,
-                )
+                # Bound inside the generator, not around the response: a `with`
+                # out there would have exited before the first story is generated.
+                with telemetry.bind_context(user_email=ident.get("user_email"),
+                                            user_id=ident.get("user_id"), workflow="figma"):
+                    story_text = await asyncio.to_thread(
+                        _figma_story.generate_story_for_role,
+                        frames,
+                        role,
+                        body.user_description,
+                        body.history,
+                        body.final_supplement,
+                    )
                 save_figma_story(cache_key, role, story_text)
                 yield {
                     "event": "story",
@@ -817,7 +911,7 @@ async def figma_stories_batch_save(body: FigmaStoryBatchSaveRequest):
 
 
 @router.post("/figma/stories/generate-one")
-async def figma_generate_one(body: FigmaGenerateOneRequest) -> dict:
+async def figma_generate_one(request: Request, body: FigmaGenerateOneRequest) -> dict:
     """Generate a single (feature, role) story on demand. FE/BE/QA receive the
     edited PM story as context so downstream tasks align with the finalized spec."""
     if body.role not in _fsg._ROLE_INSTRUCTIONS:
@@ -834,13 +928,14 @@ async def figma_generate_one(body: FigmaGenerateOneRequest) -> dict:
     model = (cfg.llm_prd if body.role == "PM"
              else (cfg.llm_analyze or cfg.llm_edges or cfg.llm_iterate or cfg.default_model))
     comments = get_figma_comments(body.file_key) or []
-    text = await asyncio.to_thread(
-        _fsg.generate_one_story,
-        body.feature.model_dump(), body.role,
-        figma_texts, figma_nodes, [], body.supplement, body.pm_context,
-        model,
-        comments, sel,
-    )
+    with _llm_context(request):
+        text = await asyncio.to_thread(
+            _fsg.generate_one_story,
+            body.feature.model_dump(), body.role,
+            figma_texts, figma_nodes, [], body.supplement, body.pm_context,
+            model,
+            comments, sel,
+        )
     return {"feature_id": body.feature.id, "role": body.role, "text": text}
 
 
@@ -957,8 +1052,16 @@ async def figma_history_delete(session_id: str) -> dict:
 # ── Figma Pipeline v2 (LangGraph Human-in-the-loop) ──────────────────────────
 
 async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict) -> None:
+    """Bind this session's telemetry context, then stream the pipeline."""
+    with telemetry.bind_context(app_session_id=session.id, user_email=session.user_email,
+                                user_id=session.user_id, workflow="figma"):
+        await _stream_figma_pipeline_inner(session, input_val, config)
+
+
+async def _stream_figma_pipeline_inner(session: Session, input_val: Any, config: dict) -> None:
     """Stream FIGMA_PIPELINE events → session.queue. Mirrors _stream_pipeline."""
     is_interrupt = False
+    _node_started_at: dict[str, float] = {}
     try:
         async for event in _fsg.FIGMA_PIPELINE.astream_events(input_val, config=config, version="v2"):
             etype = event.get("event", "")
@@ -968,6 +1071,10 @@ async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict)
                 data_input = event.get("data", {}).get("input", {}) or {}
                 cf = data_input.get("current_feature") or {}
                 cr = data_input.get("current_role") or ""
+                _node_started_at[f"{name}:{cf.get('id', '')}:{cr}"] = time.time()
+                _emit(session, "figma_pipeline_step_started", properties={
+                    "node": name, "feature_id": cf.get("id", ""), "role": cr,
+                })
                 await session.queue.put({
                     "type":       "step_start",
                     "node":       name,
@@ -978,11 +1085,17 @@ async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict)
                 "cache_check", "parse_frames",
                 "gen_questions", "wait_answers", "gen_feature_list", "wait_features", "save_cache"
             ):
+                _node_started_at[name] = time.time()
+                _emit(session, "figma_pipeline_step_started", properties={"node": name})
                 await session.queue.put({"type": "step_start", "node": name})
 
             elif etype == "on_chain_end" and name in (
                 "cache_check", "parse_frames", "gen_questions", "gen_feature_list", "save_cache"
             ):
+                _started = _node_started_at.pop(name, None)
+                _emit(session, "figma_pipeline_step_completed",
+                      duration_ms=int((time.time() - _started) * 1000) if _started else None,
+                      properties={"node": name})
                 await session.queue.put({"type": "step_end", "node": name})
 
             elif etype == "on_chain_end" and name == "story_node":
@@ -991,6 +1104,14 @@ async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict)
                 for fid, roles in stories.items():
                     for role, text in roles.items():
                         if text:
+                            _started = _node_started_at.pop(f"{name}:{fid}:{role}", None)
+                            # Success criterion #2 — a story is app output, not just usage.
+                            _emit(session, "figma_story_generated", event_type="app_output",
+                                  duration_ms=int((time.time() - _started) * 1000) if _started else None,
+                                  properties={
+                                      "feature_id": fid, "role": role,
+                                      "story_chars": len(text),
+                                  })
                             await session.queue.put({
                                 "type":       "story",
                                 "feature_id": fid,
@@ -1014,6 +1135,11 @@ async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict)
             session.interrupt_type = itype
             session.interrupt_data = interrupt_value
             is_interrupt = True
+            _emit(session, "figma_pipeline_interrupted", properties={
+                "interrupt_type": itype,
+                "question_count": len(interrupt_value.get("questions") or []),
+                "feature_count": len(interrupt_value.get("features") or []),
+            })
             await session.queue.put({
                 "type":           "interrupt",
                 "interrupt_type": itype,
@@ -1047,11 +1173,24 @@ async def _stream_figma_pipeline(session: Session, input_val: Any, config: dict)
                     "confirmed_features": final_state.get("confirmed_features", []),
                     "cache_key":         final_state.get("cache_key", ""),
                 }
+                _emit(session, "figma_pipeline_completed",
+                      duration_ms=int((time.time() - session.created_at) * 1000),
+                      properties={
+                          "cache_key": final_state.get("cache_key", ""),
+                          "feature_count": len(final_state.get("confirmed_features") or []),
+                          "story_count": sum(
+                              1 for roles in (final_state.get("stories") or {}).values()
+                              for text in roles.values() if text
+                          ),
+                      })
                 await session.queue.put({"type": "complete", "result": session.result})
 
     except Exception as exc:
         session.status = "error"
         session.error  = str(exc)
+        _emit(session, "figma_pipeline_failed", properties={
+            "error_type": type(exc).__name__, "error": str(exc)[:200],
+        })
         await session.queue.put({"type": "pipeline_error", "message": str(exc)})
     finally:
         if not is_interrupt:
@@ -1078,6 +1217,7 @@ class FigmaPipelineConfirmRequest(BaseModel):
 
 @router.post("/figma/pipeline/start")
 async def figma_pipeline_start(
+    request: Request,
     body: FigmaPipelineStartRequest,
     background_tasks: BackgroundTasks,
 ) -> dict:
@@ -1085,7 +1225,20 @@ async def figma_pipeline_start(
     thread_id = str(uuid.uuid4())
     session   = Session(thread_id)
     session.status = "running"
+    # Bind the acting user now, while the request headers still exist — the
+    # pipeline runs as a background task and every later event is attributed
+    # from here.
+    _ident = telemetry.identity_from(request)
+    session.user_email = _ident.get("user_email")
+    session.user_id = _ident.get("user_id")
     FIGMA_SESSIONS[thread_id] = session
+    _emit(session, "figma_pipeline_started", properties={
+        "file_key": body.file_key,
+        "frame_count": len(body.frame_ids or []),
+        "roles": body.roles,
+        "force_regenerate": body.force_regenerate,
+        "description_chars": len(body.user_description or ""),
+    })
 
     initial_state = {
         "file_key":         body.file_key,
@@ -1146,6 +1299,10 @@ async def figma_pipeline_answer(
         raise HTTPException(409, f"Session is not waiting for answers (state: {session.status}, interrupt: {session.interrupt_type})")
 
     session.status = "running"
+    _emit(session, "figma_questions_answered", properties={
+        "answer_count": len(body.answers or {}),
+        "proceed": body.proceed,
+    })
     resume_value   = {"answers": body.answers, "proceed": body.proceed}
     config         = {"configurable": {"thread_id": thread_id}}
     background_tasks.add_task(_stream_figma_pipeline, session, Command(resume=resume_value), config)
@@ -1166,6 +1323,10 @@ async def figma_pipeline_confirm(
         raise HTTPException(409, f"Session is not waiting for feature confirmation (state: {session.status}, interrupt: {session.interrupt_type})")
 
     session.status = "running"
+    _emit(session, "figma_features_confirmed", properties={
+        "confirmed_count": len(body.confirmed_ids or []),
+        "supplement_chars": len(body.supplement or ""),
+    })
     resume_value   = {"confirmed_ids": body.confirmed_ids, "supplement": body.supplement}
     config         = {"configurable": {"thread_id": thread_id}}
     background_tasks.add_task(_stream_figma_pipeline, session, Command(resume=resume_value), config)
@@ -1174,6 +1335,48 @@ async def figma_pipeline_confirm(
 
 # ── Admin (this service's own health/switch-mode/cost-report — folded in
 #    from the old routers/admin.py now that this runs as its own process) ────
+
+# ── App telemetry ─────────────────────────────────────────────────────────────
+
+class TelemetryEvent(BaseModel):
+    """One semantic interaction. Mirrors the payload track.ts sends."""
+    event_name: str
+    event_time: Optional[str] = None
+    page: Optional[str] = None
+    session_id: Optional[str] = None        # browser session (sessionStorage)
+    app_session_id: Optional[str] = None    # pipeline session — the join key
+    workflow: Optional[str] = None
+    properties: dict = {}
+
+
+class TelemetryBatch(BaseModel):
+    events: list[TelemetryEvent] = []
+
+
+@router.post("/events")
+async def receive_events(batch: TelemetryBatch, request: Request) -> dict:
+    """Accept interaction events and write them to the governed telemetry stream.
+
+    Twin of the text-spec service's endpoint — see that one for why the frontend
+    app owns the authoritative /api/events and this exists alongside it.
+    """
+    ident = telemetry.resolve_identity(request)
+    for event in batch.events[:100]:   # bound one request
+        telemetry.track(
+            event.event_name,
+            event_type="ui_interaction",
+            event_time=event.event_time,
+            page=event.page,
+            workflow=event.workflow or "figma",
+            session_id=event.session_id,
+            app_session_id=event.app_session_id,
+            user_email=ident.get("user_email"),
+            user_id=ident.get("user_id"),
+            request_id=ident.get("request_id"),
+            properties=event.properties or {},
+        )
+    return {"accepted": True, "count": len(batch.events[:100])}
+
 
 @router.get("/health")
 @router.get("/figma/health")
@@ -1190,6 +1393,7 @@ async def health():
         "active_pipeline_sessions": len(FIGMA_SESSIONS),
         "db_path": str(_db.DB_PATH),
         "volume_sync": _db.sync_diag,
+        "telemetry": telemetry.diagnostics(),
     }
 
 
