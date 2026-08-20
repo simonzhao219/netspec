@@ -1,0 +1,42 @@
+# Environment & secrets — NEVER commit these
+backend/.env
+backend/.env.*
+.env
+.env.*
+!backend/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+frontend/node_modules/
+
+# DB & logs
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+*.db.pre-stage2-backup*
+/tmp/*.log
+backend/netspec.db
+
+# Generated outputs (not source)
+backend/figma_output.json
+backend/spec_*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code internal
+CLAUDE.md
+AGENTS.md
+
+#local model
+container/models
