@@ -29,7 +29,7 @@ NetSpec 是一個企業級 Agentic AI 平台，透過蘇格拉底式追問與社
 
 **其他**
 - **App Telemetry** — 每個互動、每版規格產出、每次模型呼叫的成本都落到 Unity Catalog
-  （對應 SDCL PoC 的 Success Criteria #1／#2／#10，見 `doc/SDCL_telemetry_deployment.md`）
+  （對應 SDCL PoC 的 Success Criteria #1／#2／#10，部署與驗收見 `doc/SDCL_telemetry_acceptance.md`）
 - **Phase 0 安全檢查** — 三層防護（敏感資訊遮蔽、攻擊攔截、Prompt Injection 移除）
 - **Per-step LLM 路由** — 每個 Pipeline 節點可獨立分配不同模型或 provider
 - **多 Provider 支援** — Azure Anthropic、Azure OpenAI、Databricks Model Serving、OpenAI、Ollama
@@ -293,7 +293,8 @@ AI/BI dashboard 使用。對應 `doc/SDCL_telemetry.md` 的 Success Criteria
 
 | 文件 | 內容 |
 |------|------|
-| `doc/SDCL_telemetry_deployment.md` | 從零到看見第一筆資料的完整步驟、驗證方式、已知限制 |
+| `doc/SDCL_telemetry_deployment.md` | 一次性的 Unity Catalog 設定：建 schema、開 App telemetry、建 view |
+| `doc/SDCL_telemetry_acceptance.md` | **merge 之後怎麼部署、怎麼驗收**：部署順序、5 分鐘冒煙測試、逐條對應 Success Criteria 的驗收表、查不到資料時的排查流程 |
 | `doc/SDCL_telemetry_events.md` | 事件字典——每個 `event_name` 的意義與 properties |
 | `doc/sql/01_setup.sql` | Unity Catalog schema 與 typed table（含 Genie 需要的 comment）|
 | `doc/sql/02_bronze_from_otel.sql` | 從 `otel_logs` 還原成 typed columns |
