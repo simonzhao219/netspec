@@ -128,6 +128,12 @@ databricks apps deploy netspec --source-code-path /Workspace/Users/$EMAIL/netspe
 App 建立、service principal 授權、Secret ACL、Volume 三層權限這些**既有步驟不變**，
 見 `README.md` 的「部署到 Databricks Apps」。這次沒有新增任何 secret。
 
+> **注意：目前只能手動部署。** `.github/workflows/databricks-test.yml`（Deploy Apps to Dev）
+> 的觸發條件是 `on: push: branches: [dev]`，但這個 repo 的分支是 `main` / `develop`，
+> **沒有 `dev` 分支**，所以這個 workflow 從來沒有跑過。要改成自動部署的話是把
+> workflow 裡的 `dev` 改成 `develop` —— 但那會讓「合併進 develop」＝「直接部署到
+> Databricks workspace」，這是你的決定，我沒有自己改。
+
 ---
 
 ## 5. 驗證：看見第一筆資料
