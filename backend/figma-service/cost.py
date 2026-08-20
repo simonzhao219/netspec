@@ -21,19 +21,20 @@ PRICES: dict[str, tuple[float, float]] = {
 DEFAULT_PRICE = (2.50, 10.00)
 
 # tool 名稱 → pipeline 步驟（顯示用）。tool 幾乎一對一對應步驟。
+#
+# 這份表原本是從 text-spec-service/cost.py 逐字複製過來的，裡面**一個 figma-service
+# 的 tool 都沒有**——這個服務實際呼叫的是下面這四個。`STEP_BY_TOOL.get(tool, tool)`
+# 查不到就 fallback 成原始 tool 名，所以整條 Figma 工作流在 v_ai_cost_by_stage 的
+# sdlc_step 會顯示英文 tool 名而不是 SDLC 步驟（criterion #10 的「by SDLC stage」對
+# 這半邊等於失效）。兩邊的 cost.py 依然是各自獨立的副本，但內容現在各自對應自己
+# 真正會呼叫的 tool。
 STEP_BY_TOOL: dict[str, str] = {
-    "parse_and_score":             "1 · 需求解析＋清晰度",
-    "parse_requirement":           "1 · 需求解析",
-    "score_clarity":               "1 · 清晰度評分",
-    "generate_socratic_questions": "2 · 蘇格拉底追問",
-    "generate_search_plan":        "3 · 搜尋規劃",
-    "analyze_disaster_patterns":   "5 · 社群災情分析",
-    "detect_edge_cases":           "6 · 邊界情境偵測",
-    "generate_spec_document":      "7 · PRD 規格生成",
-    "validate_spec":               "8 · 品質校驗",
-    "score_spec":                  "8 · 品質評分",
-    "architect_view":              "＋ 架構師視圖",
-    "qa_view":                     "＋ QA 視圖",
+    # LangGraph story pipeline（figma_story_graph.py）
+    "generate_figma_questions": "F1 · Figma 需求追問",
+    "generate_feature_list":    "F2 · 功能清單生成",
+    "generate_story_content":   "F3 · User Story 生成",
+    # Legacy 逐角色 story 生成（figma_story.py，/api/figma/story/stream）
+    "generate_markdown_content": "F4 · 角色 Story 文件生成",
 }
 
 

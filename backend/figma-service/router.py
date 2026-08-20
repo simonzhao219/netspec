@@ -84,6 +84,22 @@ def _emit_request(request: Request, event_name: str, *, duration_ms: int | None 
     )
 
 
+def _llm_context(request: Request):
+    """Bind who is asking, for endpoints that call a model without a pipeline session.
+
+    The LangGraph pipeline binds app_session_id through :func:`_stream_figma_pipeline`;
+    these legacy per-request endpoints have no session to bind, but the llm_call
+    cost events they trigger still have to name a user and a workflow — otherwise
+    that spend lands in v_ai_cost_by_stage with every join key null.
+    """
+    ident = telemetry.identity_from(request)
+    return telemetry.bind_context(
+        user_email=ident.get("user_email"),
+        user_id=ident.get("user_id"),
+        workflow="figma",
+    )
+
+
 def _get_cached_frames(file_key: str) -> list[dict]:
     cached = get_figma_cache(file_key)
     if not cached:
@@ -723,7 +739,7 @@ class FigmaStoryEditRequest(BaseModel):
 
 
 @router.post("/figma/story/question")
-async def figma_story_question(body: FigmaStoryQuestionRequest):
+async def figma_story_question(request: Request, body: FigmaStoryQuestionRequest):
     """AI 追問（多輪）：根據 Frame、使用者說明、歷史問答，生成 2-3 個追問。最多 3 輪。"""
     if len(body.history) >= 3:
         raise HTTPException(400, "已達追問上限（3 輪），請直接進行生成。")
@@ -732,11 +748,16 @@ async def figma_story_question(body: FigmaStoryQuestionRequest):
         frames = _figma_story.collect_frames(all_frames, body.frame_ids)
         if not frames:
             raise HTTPException(422, "找不到選取的 Frame，請重新選擇。")
-        questions = _figma_story.generate_questions(
-            frames=frames,
-            user_description=body.user_description,
-            history=body.history,
-        )
+        # This legacy path has no pipeline session, so there is no app_session_id
+        # to bind — but the user and workflow still have to reach the llm_call
+        # cost event, or this spend shows up in v_ai_cost_by_stage attributed to
+        # nobody. See _llm_context.
+        with _llm_context(request):
+            questions = _figma_story.generate_questions(
+                frames=frames,
+                user_description=body.user_description,
+                history=body.history,
+            )
         return {"questions": questions, "round": len(body.history) + 1}
     except HTTPException:
         raise
@@ -745,7 +766,7 @@ async def figma_story_question(body: FigmaStoryQuestionRequest):
 
 
 @router.post("/figma/story/stream")
-async def figma_story_stream(body: FigmaStoryStreamRequest):
+async def figma_story_stream(request: Request, body: FigmaStoryStreamRequest):
     """Story 生成 SSE：逐角色生成，每完成一個立即推送，同時存入 DB。"""
     invalid = [r for r in body.roles if r not in _figma_story.VALID_ROLES]
     if invalid:
@@ -758,19 +779,27 @@ async def figma_story_stream(body: FigmaStoryStreamRequest):
 
     cache_key = _figma_story.story_cache_key(body.file_key, body.frame_ids)
 
+    # Resolved here, while the request headers still exist: the generator below
+    # runs after this handler has returned, so it cannot read them itself.
+    ident = telemetry.identity_from(request)
+
     async def event_generator():
         yield {"event": "progress", "data": json.dumps({"step": "start", "roles": body.roles}, ensure_ascii=False)}
         for role in body.roles:
             yield {"event": "progress", "data": json.dumps({"step": "generating", "role": role}, ensure_ascii=False)}
             try:
-                story_text = await asyncio.to_thread(
-                    _figma_story.generate_story_for_role,
-                    frames,
-                    role,
-                    body.user_description,
-                    body.history,
-                    body.final_supplement,
-                )
+                # Bound inside the generator, not around the response: a `with`
+                # out there would have exited before the first story is generated.
+                with telemetry.bind_context(user_email=ident.get("user_email"),
+                                            user_id=ident.get("user_id"), workflow="figma"):
+                    story_text = await asyncio.to_thread(
+                        _figma_story.generate_story_for_role,
+                        frames,
+                        role,
+                        body.user_description,
+                        body.history,
+                        body.final_supplement,
+                    )
                 save_figma_story(cache_key, role, story_text)
                 yield {
                     "event": "story",
@@ -882,7 +911,7 @@ async def figma_stories_batch_save(body: FigmaStoryBatchSaveRequest):
 
 
 @router.post("/figma/stories/generate-one")
-async def figma_generate_one(body: FigmaGenerateOneRequest) -> dict:
+async def figma_generate_one(request: Request, body: FigmaGenerateOneRequest) -> dict:
     """Generate a single (feature, role) story on demand. FE/BE/QA receive the
     edited PM story as context so downstream tasks align with the finalized spec."""
     if body.role not in _fsg._ROLE_INSTRUCTIONS:
@@ -899,13 +928,14 @@ async def figma_generate_one(body: FigmaGenerateOneRequest) -> dict:
     model = (cfg.llm_prd if body.role == "PM"
              else (cfg.llm_analyze or cfg.llm_edges or cfg.llm_iterate or cfg.default_model))
     comments = get_figma_comments(body.file_key) or []
-    text = await asyncio.to_thread(
-        _fsg.generate_one_story,
-        body.feature.model_dump(), body.role,
-        figma_texts, figma_nodes, [], body.supplement, body.pm_context,
-        model,
-        comments, sel,
-    )
+    with _llm_context(request):
+        text = await asyncio.to_thread(
+            _fsg.generate_one_story,
+            body.feature.model_dump(), body.role,
+            figma_texts, figma_nodes, [], body.supplement, body.pm_context,
+            model,
+            comments, sel,
+        )
     return {"feature_id": body.feature.id, "role": body.role, "text": text}
 
 

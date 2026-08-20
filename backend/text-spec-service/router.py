@@ -1166,11 +1166,18 @@ async def generate_role(request: Request, session_id: str, body: GenerateRoleReq
     cfg = get_settings()
     based_on = max(1, body.iteration)
     try:
-        view = await asyncio.to_thread(
-            generate_role_view, role, spec_sections,
-            result.get("spec_document", ""), result.get("edge_cases", []),
-            cfg.llm_analyze or cfg.default_model,
-        )
+        # Bind the session before the call, exactly as _run_pipeline does: the
+        # architect_view / qa_view model calls emit their llm_call cost events
+        # from inside llm_client, and without this they would land with a null
+        # app_session_id and drop out of the cost-per-specification join.
+        # asyncio.to_thread copies the current context into the worker thread.
+        with telemetry.bind_context(app_session_id=session.id, user_email=session.user_email,
+                                    user_id=session.user_id, workflow="text"):
+            view = await asyncio.to_thread(
+                generate_role_view, role, spec_sections,
+                result.get("spec_document", ""), result.get("edge_cases", []),
+                cfg.llm_analyze or cfg.default_model,
+            )
     except Exception as exc:
         raise HTTPException(500, f"角色視圖生成失敗：{exc}")
 

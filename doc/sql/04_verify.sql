@@ -44,6 +44,20 @@ SELECT
 FROM v_app_events
 WHERE event_type = 'ui_interaction';
 
+-- Server-side events are attributed through the frontend proxy's private
+-- identity relay (X-NetSpec-User-Email), because the backend App's own auth
+-- proxy overwrites X-Forwarded-Email with whichever principal authenticated
+-- that hop. PASS: the emails here are PEOPLE. If you see a service principal
+-- (a bare uuid, or a name ending in the app's id), the relay is not reaching
+-- the backend — see section 8 of SDCL_telemetry_deployment.md. The data is
+-- still recoverable: join app_session_id to the ui_interaction rows, which
+-- always carry the real user.
+SELECT event_type, service, count(*) AS events, collect_set(user_email) AS emails
+FROM v_app_events
+WHERE event_type <> 'ui_interaction'
+GROUP BY event_type, service
+ORDER BY event_type, service;
+
 
 -- ── 2. CRITERION #2 — app output, "joinable to the telemetry on session and
 --       user". One query, both sides of the join.

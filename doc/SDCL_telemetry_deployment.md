@@ -246,3 +246,15 @@ space 時把這幾個 view 加進去即可：
   裡（criterion #9 的跨 App 時間軸），下游查詢一行都不用改。
 - **`otel_logs` 的表名可能有 prefix。** 依 workspace 設定而定，所以
   `02_bronze_from_otel.sql` 的 FROM 子句刻意留給你填。
+- **後端事件的 `user_email` 靠前端 proxy 轉發，部署後要量一次。** 後端 App 前面有
+  自己的 auth proxy，會用「這一跳認證到的 principal」覆寫 `X-Forwarded-*`，所以
+  前端 proxy 是用**私有 header**（`X-NetSpec-User-Email` / `X-NetSpec-User-Id`）轉發
+  真人身分，`telemetry.identity_from()` 優先採用它們。跑 `04_verify.sql` 第 1 節
+  最後那段「身分是不是真人」的查詢確認：如果後端事件的 `user_email` 出現的是
+  service principal 而不是人的信箱，代表這條轉發沒生效。真的失效時資料仍救得回來
+  ——用 `app_session_id` join 前端的 `ui_interaction` 列即可，那些列的 email 一定是對的。
+- **`/api/translate` 的花費看不到。** 它自己 new OpenAI client，繞過 `llm_client`，
+  所以不產生 `llm_call`（既有行為）。要納入的話得把它改走 `llm_client`。
+- **Figma legacy 端點的成本沒有 `app_session_id`。** `/figma/story/question`、
+  `/figma/story/stream`、`/figma/stories/generate-one` 是無狀態的，沒有 pipeline
+  session 可綁；它們的 `llm_call` 有 `user_email` 與 `step`，但歸不到某一份產出。

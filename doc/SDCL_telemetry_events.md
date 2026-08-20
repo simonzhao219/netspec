@@ -124,8 +124,12 @@
 
 ## `llm_call` — AI 成本（Success Criterion #10）
 
-一次模型呼叫一列，從 `llm_client._record_usage()` 這個**所有呼叫都會經過的唯一路徑**
-送出，所以呼叫端零埋點。
+一次模型呼叫一列，從 `llm_client._record_usage()` 送出——**凡是走 `llm_client` 的呼叫
+都會經過這裡**，所以呼叫端零埋點。
+
+> 唯一的例外是 `/api/translate`：它自己 new 了一個 OpenAI client，完全繞過
+> `llm_client`（既有行為，本次沒有改動），所以**翻譯的花費不會產生 `llm_call`**，
+> 舊的 `GET /api/cost-report` 也同樣看不到。
 
 | properties | 說明 |
 |---|---|
@@ -134,6 +138,15 @@
 | `input_tokens` / `output_tokens` / `total_tokens` | token 用量 |
 | `cost_usd` | 估算成本（單價來自 `cost.py` 的 `PRICES`，為公開列表價）|
 
-也會帶 `app_session_id` 與 `user_email`——透過 `telemetry.bind_context()`
-從 pipeline 外層傳下去，所以每一分錢都能歸到「哪個人、哪個 session、哪份規格」。
-用 `v_ai_cost_by_stage` 查最方便。
+也會帶 `app_session_id` 與 `user_email`——透過 `telemetry.bind_context()` 從呼叫的
+外層傳下去。綁定的涵蓋範圍：
+
+| 路徑 | `user_email` | `app_session_id` |
+|---|---|---|
+| text-spec pipeline / iterate / 角色視圖 | ✅ | ✅ |
+| Figma LangGraph story pipeline | ✅ | ✅ |
+| Figma legacy 端點（`/figma/story/question`、`/figma/story/stream`、`/figma/stories/generate-one`）| ✅ | ❌ 這幾支是無狀態的，沒有 pipeline session 可綁 |
+
+所以「這筆花費是誰花的、屬於哪個 SDLC 步驟」永遠答得出來；「屬於哪份規格」在上表
+最後一列那幾支端點答不出來。`04_verify.sql` 的「每份規格的成本」是 INNER JOIN，
+那些列會自動被排除，不會污染數字。用 `v_ai_cost_by_stage` 查最方便。

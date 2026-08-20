@@ -86,24 +86,37 @@ if not logger.handlers:
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 
+# The frontend proxy relays the browser-resolved user under these PRIVATE header
+# names rather than re-sending X-Forwarded-Email. That header belongs to the
+# platform: the backend App sits behind its own auth proxy, which sets
+# X-Forwarded-* for whichever principal authenticated THAT hop — the frontend's
+# service principal whenever the frontend falls back to its M2M token. A private
+# name nothing else writes is the only way the human's identity survives the hop.
+RELAY_EMAIL_HEADER = "x-netspec-user-email"
+RELAY_USER_HEADER = "x-netspec-user-id"
+
+
 def identity_from(request: Any) -> dict:
     """The acting user, injected by the Databricks Apps platform — no auth code.
 
     ``X-Forwarded-Access-Token`` is deliberately not read: a bearer token has no
     business in a log line.
 
-    On the backend services these headers describe whichever principal the
-    frontend proxy authenticated as. The frontend's own /api/events handler sees
-    the browser request directly and is the authoritative source of user_email;
-    it forwards it explicitly, and :func:`resolve_identity` prefers that.
+    The relayed private headers win over the platform ones. Only the frontend's
+    /api/events handler sees the browser's request directly, so only it knows the
+    real human; the platform headers on THIS hop describe whichever principal the
+    proxy authenticated as. Trust model: these services are reachable only behind
+    the workspace auth proxy, and the value is used for telemetry attribution
+    only — never for authorization — so a spoofed header costs a wrong dashboard
+    row and nothing else.
     """
     try:
         headers = request.headers
     except Exception:
         return {"user_email": None, "user_id": None, "request_id": None}
     return {
-        "user_email": headers.get("x-forwarded-email"),
-        "user_id": headers.get("x-forwarded-user"),
+        "user_email": headers.get(RELAY_EMAIL_HEADER) or headers.get("x-forwarded-email"),
+        "user_id": headers.get(RELAY_USER_HEADER) or headers.get("x-forwarded-user"),
         "request_id": headers.get("x-request-id"),
     }
 
