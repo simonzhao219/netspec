@@ -1,0 +1,2286 @@
+{
+  "project_key": "EP",
+  "board_url": "https://asus-team-cnw.atlassian.net/jira/software/projects/EP/boards/209",
+  "source_document": "doc/SDCL_telemetry.md",
+  "conventions": {
+    "hierarchy": "Epic -> Story / Task. Sub-tasks only when one Story needs to split across two owners.",
+    "summary_style": "Imperative verb + object + qualifier. <= 80 chars. No 'and' joining two deliverables.",
+    "description_template": [
+      "Context",
+      "In scope",
+      "Out of scope",
+      "Acceptance criteria",
+      "Technical notes",
+      "References"
+    ],
+    "labels": {
+      "always": "ep-poc",
+      "traceability": "sc-1 .. sc-10 map every issue back to a Success Criterion in doc/SDCL_telemetry.md",
+      "system": "netspec | bugzapper | polaris | jira-src | github-src | figma-src | squashtm | databricks",
+      "workstream": "telemetry | ingestion | governance | genie | dashboard | finops | enablement",
+      "schedule": "week-0 (pre-work) .. week-5"
+    },
+    "estimation": "Fibonacci story points. 1 = a few hours, 2 = half a day, 3 = one day, 5 = two to three days, 8 = needs splitting but is not yet splittable.",
+    "definition_of_done": [
+      "Acceptance criteria demonstrated on the real Databricks workspace, not on localhost.",
+      "Verification query or command recorded in the ticket as a comment.",
+      "Any doc under doc/ that the change invalidates is updated in the same PR."
+    ]
+  },
+  "issues": [
+    {
+      "ref": "E1",
+      "type": "Epic",
+      "summary": "App telemetry capture for the three EP apps",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": null,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [],
+      "context": "None of NetSpec, BugZapper or Polaris currently writes user interactions to a governed table, so nobody can see which steps users abandon, where they hesitate, which features go unused, or how often an answer has to be asked twice. This epic makes a browser click queryable as a typed row.",
+      "in_scope": [
+        "A single shared event contract used by all three apps",
+        "Frontend and backend instrumentation",
+        "Databricks Apps stdout export into Unity Catalog",
+        "Identity resolution from platform-injected headers"
+      ],
+      "out_of_scope": [
+        "Analysis and dashboards built on the events (E5, E6)",
+        "Application output records such as spec versions (E2)"
+      ],
+      "acceptance": [
+        "GIVEN a user clicks in any of the three apps on its real Databricks App URL, WHEN the event export has caught up, THEN the click is one typed row in Unity Catalog carrying that user's own email address.",
+        "Instrumenting a new interaction costs exactly one track() call and no authentication code anywhere in the app.",
+        "The three apps produce record-identical shapes, so one view serves all of them."
+      ],
+      "notes": [
+        "Target of Success Criterion #1 in doc/SDCL_telemetry.md."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #1",
+        "doc/SDCL_telemetry_deployment.md",
+        "doc/SDCL_telemetry_events.md"
+      ],
+      "jira_key": "EP-161",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.1",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Publish the ep.app_event.v1 contract as the shared telemetry schema",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "databricks"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [],
+      "context": "NetSpec already emits records under the telemetry_schema tag ep.app_event.v1. For criterion #9 (one timeline across apps) to work later, BugZapper and Polaris must emit the same shape rather than inventing their own. Freezing the contract now is what makes the other two apps cheap to add.",
+      "in_scope": [
+        "Field list, types and nullability",
+        "The four event_type values: ui_interaction, server_event, app_output, llm_call",
+        "The two join keys: app_session_id and user_email",
+        "The privacy rule: send lengths, ids and enumerated values, never free text"
+      ],
+      "out_of_scope": [
+        "Implementing the contract inside BugZapper or Polaris (S1.7, S1.8)"
+      ],
+      "acceptance": [
+        "The contract is written down with one row per field, each carrying a COMMENT that Genie can read.",
+        "GIVEN a candidate record from any app, WHEN it is checked against the contract, THEN a missing or mistyped field is detectable without running a query.",
+        "The BugZapper and Polaris owners have each confirmed the contract covers their app.",
+        "The privacy rule is stated explicitly: requirement text, specification body and Figma tokens never leave the app; only requirement_chars-style derivatives do."
+      ],
+      "notes": [
+        "The column comments in doc/sql/01_setup.sql are already the de facto contract; this story promotes them to an agreed, versioned one.",
+        "Version the name (v1) so a future breaking change is additive rather than silent."
+      ],
+      "references": [
+        "doc/sql/01_setup.sql",
+        "doc/SDCL_telemetry_events.md",
+        "doc/SDCL_telemetry_deployment.md - section 0"
+      ],
+      "jira_key": "EP-169",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S1.2",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Create the ep_dev.netspec schema, tables and event views",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "netspec",
+        "databricks"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        1,
+        2
+      ],
+      "blocked_by": [
+        "S1.1",
+        "S8.1"
+      ],
+      "context": "The exported events need somewhere to land and a view that turns the JSON body back into typed columns. This is the one-time Unity Catalog setup that everything downstream reads from.",
+      "in_scope": [
+        "Run 01_setup.sql to create the schema and the app_events table",
+        "Run 02_bronze_from_otel.sql after pointing its FROM clause at the real otel_logs table name",
+        "Run 03_views.sql to create v_app_events, v_spec_versions, v_ai_cost_by_stage and v_sessions"
+      ],
+      "out_of_scope": [
+        "Enabling App telemetry on each app (S1.3)"
+      ],
+      "acceptance": [
+        "SHOW TABLES IN ep_dev.netspec returns the app_events table and the otel_logs table.",
+        "DESCRIBE on each of the four views succeeds.",
+        "GIVEN the otel_logs table name carries a workspace-specific prefix, WHEN 02_bronze_from_otel.sql is run, THEN its FROM clause has been updated to the actual name rather than the placeholder.",
+        "Every column carries a COMMENT, because Genie relies on them in E5."
+      ],
+      "notes": [
+        "Catalog and schema default to ep_dev.netspec and are set in the first two lines of each SQL file.",
+        "v_app_events unions the stdout path and the optional Delta path and de-duplicates on event_id, so enabling or disabling either path later needs no downstream change."
+      ],
+      "references": [
+        "doc/sql/01_setup.sql",
+        "doc/sql/02_bronze_from_otel.sql",
+        "doc/sql/03_views.sql",
+        "doc/SDCL_telemetry_deployment.md - sections 1 to 3"
+      ],
+      "jira_key": "EP-170",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.3",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Enable Databricks Apps telemetry export on all three NetSpec apps",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "netspec",
+        "databricks"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [
+        "S1.2"
+      ],
+      "context": "App telemetry is configured per app, not per workspace. NetSpec is three deployed apps - the frontend, text-spec-service and figma-service - and enabling only one of them yields browser interactions with no pipeline steps, no specification output and no AI cost.",
+      "in_scope": [
+        "Turn on App telemetry for netspec, netspec-backend and netspec-figma-backend",
+        "Redeploy each app afterwards, which is what actually starts the export",
+        "Confirm the otel_logs table name each app writes to"
+      ],
+      "out_of_scope": [
+        "The optional Delta direct-write fallback (S1.6)"
+      ],
+      "acceptance": [
+        "GIVEN telemetry has been enabled in the workspace UI, WHEN the app is redeployed, THEN rows begin appearing in otel_logs; enabling without redeploying is explicitly verified as insufficient.",
+        "SELECT DISTINCT service FROM v_app_events returns all three services: frontend, text-spec-service and figma-service.",
+        "No service reports itself as unknown-service."
+      ],
+      "notes": [
+        "A missing redeploy is the single most common reason the App log shows JSON lines while v_app_events stays empty."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 2",
+        "doc/SDCL_telemetry_acceptance.md - section 5"
+      ],
+      "jira_key": "EP-171",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.4",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Relay the human identity from the frontend proxy to the backend services",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "netspec"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [
+        "S1.3"
+      ],
+      "context": "Each backend app sits behind its own auth proxy, which overwrites X-Forwarded-* with the principal authenticated on that hop. Left alone, backend events are attributed to a service principal instead of a person, which breaks every per-user question in E5 and E6.",
+      "in_scope": [
+        "Forward the real identity through private headers (X-NetSpec-User-Email, X-NetSpec-User-Id)",
+        "Have telemetry.identity_from() prefer those over X-Forwarded-*",
+        "Measure the result once on the deployed apps"
+      ],
+      "out_of_scope": [
+        "Any authentication logic inside the app; identity stays platform-injected"
+      ],
+      "acceptance": [
+        "GIVEN a real user drives a pipeline on the deployed app, WHEN the identity check in 04_verify.sql section 1 runs, THEN backend server_event rows carry that person's email, not a service principal.",
+        "The unattributed count in the same query is 0.",
+        "GIVEN the relay were to fail, WHEN the fallback is exercised, THEN identity is still recoverable by joining ui_interaction rows on app_session_id - and this recovery path is documented in the ticket."
+      ],
+      "notes": [
+        "The relay lives in frontend/app/api/[...path]/route.ts; it must be present in the deployed build, not only on the branch."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 8",
+        "doc/sql/04_verify.sql - section 1"
+      ],
+      "jira_key": "EP-172",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.5",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Verify a NetSpec browser click lands as a typed row with the correct user",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "netspec"
+      ],
+      "week": "week-1",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [
+        "S1.3",
+        "S1.4"
+      ],
+      "context": "This is the acceptance test for Success Criterion #1. It has to be run against the real Databricks App URL, because the identity headers are injected by the Databricks auth proxy and bypassing it - localhost, ngrok, direct backend calls - produces rows with no user_email.",
+      "in_scope": [
+        "Walk scenario A in the acceptance runbook end to end, including closing the tab so session_end fires",
+        "Run section 1 of 04_verify.sql",
+        "Record the result in the acceptance table"
+      ],
+      "out_of_scope": [
+        "The Figma workflow walk-through, which belongs to S6.6"
+      ],
+      "acceptance": [
+        "GIVEN the eleven-step scenario A has been performed, WHEN section 1 of 04_verify.sql runs, THEN one browser click is one typed row and user_email is the tester's own address.",
+        "unattributed = 0.",
+        "session_end is present, so dwell time in v_sessions is real rather than truncated.",
+        "A code reading confirms the no-instrumentation claim: one track() call per interaction and no authentication code in the app."
+      ],
+      "notes": [
+        "Step 11 - closing the tab - cannot be skipped; session_end is only sent on tab hide via sendBeacon.",
+        "Allow a few minutes between the last click and the query: the frontend batches at 700ms and the platform export adds its own lag."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_acceptance.md - sections 4a to 4c",
+        "doc/sql/04_verify.sql"
+      ],
+      "jira_key": "EP-173",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.6",
+      "parent": "E1",
+      "type": "Task",
+      "summary": "Enable the Delta direct-write fallback sink for telemetry",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "netspec",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [
+        "S1.3"
+      ],
+      "context": "A second, independent landing path exists for the case where App telemetry cannot be enabled or the team wants a table it fully controls. It is off by default. Turning it on is cheap insurance for the PoC demo, and both paths produce identical records that v_app_events de-duplicates on event_id.",
+      "in_scope": [
+        "Grant each app service principal USE_CATALOG, USE_SCHEMA and MODIFY/SELECT on app_events",
+        "Grant CAN_USE on the SQL warehouse",
+        "Set TELEMETRY_TABLE and TELEMETRY_WAREHOUSE_ID in the three app.yaml files and redeploy"
+      ],
+      "out_of_scope": [
+        "Switching the primary path away from stdout"
+      ],
+      "acceptance": [
+        "The telemetry.delta_sink field of /api/health is true on all three apps.",
+        "telemetry.delta_failed is false.",
+        "GIVEN the Delta sink is misconfigured, WHEN an event is emitted, THEN the app degrades silently, the stdout path is unaffected and the user sees nothing - verified deliberately, not assumed."
+      ],
+      "notes": [
+        "Warehouse CAN_USE currently has to be granted in the UI.",
+        "Deprioritise if the stdout path is proven healthy in S1.5; this is a fallback, not a requirement."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 6"
+      ],
+      "jira_key": "EP-174",
+      "priority": "Low"
+    },
+    {
+      "ref": "S1.7",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Instrument BugZapper interactions against the shared event contract",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "bugzapper"
+      ],
+      "week": "week-1",
+      "owner": "Winnie",
+      "points": 5,
+      "success_criteria": [
+        1,
+        9
+      ],
+      "blocked_by": [
+        "S1.1"
+      ],
+      "context": "BugZapper is the second EP app on Databricks. The PoC needs its RCA usage - follow-up questions and re-asks in particular, since a re-ask is the clearest signal that the first answer did not land.",
+      "in_scope": [
+        "A track() call at each interaction point",
+        "A backend emit path for server-side RCA steps",
+        "Enable App telemetry on the app and redeploy"
+      ],
+      "out_of_scope": [
+        "RCA output records - root causes and suspect commits - which are S2.3"
+      ],
+      "acceptance": [
+        "GIVEN a user runs an RCA in BugZapper, WHEN v_app_events is queried, THEN the rows appear with app = bugzapper and the correct user_email, with no change to any downstream view.",
+        "Follow-up questions and re-asks are individually identifiable as event names.",
+        "The privacy rule holds: no defect text or log content in properties, only lengths, ids and enumerated values."
+      ],
+      "notes": [
+        "The record contract and the app column were designed for three apps; emitting the same shape is all that is required and no downstream query changes.",
+        "NetSpec's frontend track.ts and backend telemetry.py are the reference implementation."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md",
+        "doc/SDCL_telemetry_deployment.md - section 8"
+      ],
+      "jira_key": "EP-175",
+      "priority": "High"
+    },
+    {
+      "ref": "S1.8",
+      "parent": "E1",
+      "type": "Story",
+      "summary": "Instrument Polaris interactions against the shared event contract",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-1",
+        "polaris"
+      ],
+      "week": "week-3",
+      "owner": "TBD",
+      "points": 5,
+      "success_criteria": [
+        1
+      ],
+      "blocked_by": [
+        "S1.1",
+        "S6.1"
+      ],
+      "context": "Polaris is the productivity dashboard, so its telemetry answers a question none of the others can: how the BU actually consumes the metrics - which pages are opened, which are ignored, and which filters people reach for.",
+      "in_scope": [
+        "track() at each interaction point",
+        "Enable App telemetry once Polaris is deployed",
+        "Confirm rows land with app = polaris"
+      ],
+      "out_of_scope": [
+        "Deploying Polaris itself, which is S6.1"
+      ],
+      "acceptance": [
+        "GIVEN Polaris is deployed as a Databricks App, WHEN a user opens a dashboard page, THEN a typed row appears in v_app_events with app = polaris and the correct user_email.",
+        "Page-level usage can be aggregated per role, which is what makes 'which metrics go unused' answerable."
+      ],
+      "notes": [
+        "Sequenced after S6.1 because there is no App platform to inject identity headers until Polaris is deployed."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Tools and systems in scope"
+      ],
+      "jira_key": "EP-176",
+      "priority": "Medium"
+    },
+    {
+      "ref": "E2",
+      "type": "Epic",
+      "summary": "App output data as governed, joinable tables",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-2"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": null,
+      "success_criteria": [
+        2
+      ],
+      "blocked_by": [],
+      "context": "Telemetry says how an app was used; it does not say what the app produced. NetSpec specification versions and approval state, and BugZapper root causes and suspect commits, currently sit in isolation and cannot be queried alongside anything else.",
+      "in_scope": [
+        "Emit one governed row per produced artefact",
+        "Make those rows joinable to telemetry on session and user"
+      ],
+      "out_of_scope": [
+        "Third-party records, which are E3"
+      ],
+      "acceptance": [
+        "NetSpec specification versions and BugZapper RCA analyses are both queryable as governed tables.",
+        "GIVEN a specification version, WHEN one SQL statement is run, THEN it returns that version together with the interaction count and session duration that produced it."
+      ],
+      "notes": [
+        "Target of Success Criterion #2."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #2",
+        "doc/SDCL_telemetry_events.md - app_output"
+      ],
+      "jira_key": "EP-162",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S2.1",
+      "parent": "E2",
+      "type": "Story",
+      "summary": "Verify NetSpec specification versions land with quality score and approval state",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-2",
+        "netspec"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        2
+      ],
+      "blocked_by": [
+        "S1.3"
+      ],
+      "context": "NetSpec emits one app_output row per specification version, carrying spec_id, iteration, origin, feature_name, quality_score, validation_passed, approval_state and derived_role_views. This story proves it against real usage rather than against the code.",
+      "in_scope": [
+        "Drive a run that produces two iterations plus a derived role view",
+        "Query v_spec_versions",
+        "Record the result in the acceptance table"
+      ],
+      "out_of_scope": [
+        "Changing how approval_state is derived, which is S2.2"
+      ],
+      "acceptance": [
+        "v_spec_versions returns one row per version with a non-null quality_score.",
+        "GIVEN a PM has generated an architect or QA view from a specification, WHEN v_spec_versions is queried, THEN that version reads approved_derived rather than pending_approval.",
+        "role_view_generated and figma_story_generated rows are present for the corresponding actions."
+      ],
+      "notes": [
+        "approval_state is derived in a single function, _approval_state() in text-spec-service/router.py."
+      ],
+      "references": [
+        "doc/sql/04_verify.sql - section 2",
+        "doc/SDCL_telemetry_events.md - approval_state"
+      ],
+      "jira_key": "EP-177",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S2.2",
+      "parent": "E2",
+      "type": "Story",
+      "summary": "Decide whether derived role views satisfy the approval-state criterion",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-2",
+        "netspec"
+      ],
+      "week": "week-2",
+      "owner": "PM",
+      "points": 3,
+      "success_criteria": [
+        2
+      ],
+      "blocked_by": [
+        "S2.1"
+      ],
+      "context": "NetSpec has no explicit approve button. approval_state is inferred from existing PM-first behaviour: a PM only derives the architect and QA views once they accept a specification, so 'role views derived' is today the product's only expression of acceptance. Criterion #2 names approval state explicitly, so the team has to decide whether the inference is good enough for the PoC or whether a real approval action is needed.",
+      "in_scope": [
+        "A decision, recorded on this ticket",
+        "If a real action is wanted: an explicit approval control plus an approval event",
+        "If the inference stands: state the limitation in the Week 5 evaluation"
+      ],
+      "out_of_scope": [
+        "A full approval workflow with reviewers and notifications - out of PoC scope either way"
+      ],
+      "acceptance": [
+        "The decision is recorded on the ticket with the reasoning, not only in a meeting.",
+        "GIVEN the team chooses an explicit approval action, WHEN it is implemented, THEN a distinct approved state is emitted and _approval_state() is the only function that changes.",
+        "GIVEN the team keeps the inference, WHEN the Week 5 evaluation is written, THEN criterion #2 is recorded as met by inference, with the inference stated."
+      ],
+      "notes": [
+        "This is a product decision, not an engineering one; it is a ticket so that it is not settled implicitly by whoever writes the evaluation.",
+        "Whichever way it goes, the change surface is one function."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 8",
+        "README.md - PM-first behaviour"
+      ],
+      "jira_key": "EP-178",
+      "priority": "High"
+    },
+    {
+      "ref": "S2.3",
+      "parent": "E2",
+      "type": "Story",
+      "summary": "Emit BugZapper root causes and suspect commits as app_output rows",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-2",
+        "bugzapper"
+      ],
+      "week": "week-2",
+      "owner": "Winnie",
+      "points": 5,
+      "success_criteria": [
+        2,
+        9
+      ],
+      "blocked_by": [
+        "S1.7"
+      ],
+      "context": "The RCA analyses BugZapper produces are the second half of criterion #2. Suspect commits matter beyond RCA itself: they are the natural bridge from a defect to the GitHub pull request data ingested in E3.",
+      "in_scope": [
+        "One app_output row per completed RCA, carrying the root cause classification",
+        "Suspect commit references in properties",
+        "A link to the originating defect or Jira issue key where one exists"
+      ],
+      "out_of_scope": [
+        "Changing how BugZapper computes root causes"
+      ],
+      "acceptance": [
+        "GIVEN an RCA completes, WHEN v_app_events is queried for event_type = app_output and app = bugzapper, THEN one row exists carrying the root cause and the suspect commits.",
+        "The row carries app_session_id and user_email, so it joins to the interactions that produced it.",
+        "The suspect commit reference is in a form that joins to the GitHub commit data from S3.2."
+      ],
+      "notes": [
+        "Follow the NetSpec pattern: ids, enumerations and lengths in properties, never the analysis text itself."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md - app_output",
+        "doc/SDCL_telemetry.md - Success Criteria #2"
+      ],
+      "jira_key": "EP-179",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S2.4",
+      "parent": "E2",
+      "type": "Story",
+      "summary": "Prove output records join to telemetry on session and user in one query",
+      "labels": [
+        "ep-poc",
+        "telemetry",
+        "sc-2",
+        "netspec",
+        "bugzapper"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        2
+      ],
+      "blocked_by": [
+        "S2.1",
+        "S2.3"
+      ],
+      "context": "Criterion #2 does not stop at 'queryable'; it requires the output to be joinable to the telemetry on session and user. That join is what turns 'a specification exists' into 'this specification took eleven minutes, three iterations and two re-asks'.",
+      "in_scope": [
+        "One SQL statement returning specification versions alongside their interaction count and session seconds",
+        "The same shape for BugZapper RCA output"
+      ],
+      "out_of_scope": [
+        "Cross-system joins involving Jira or GitHub, which are E4"
+      ],
+      "acceptance": [
+        "GIVEN a specification version, WHEN the single statement in section 2 of 04_verify.sql runs, THEN it returns the version, its interactions count and its session_seconds together.",
+        "The equivalent statement returns BugZapper RCA output with its interaction counts.",
+        "GIVEN an output row that has no app_session_id, WHEN the join runs, THEN it is excluded rather than silently distorting the numbers, and the exclusion is documented."
+      ],
+      "notes": [
+        "app_session_id is the join key and only exists on events emitted after the session is created; the stateless legacy Figma endpoints have none."
+      ],
+      "references": [
+        "doc/sql/04_verify.sql - section 2",
+        "doc/SDCL_telemetry_events.md - join keys"
+      ],
+      "jira_key": "EP-180",
+      "priority": "Medium"
+    },
+    {
+      "ref": "E3",
+      "type": "Epic",
+      "summary": "Ingest Figma, Jira, GitHub and SquashTM into the lakehouse",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3"
+      ],
+      "week": "week-1",
+      "owner": "Kane",
+      "points": null,
+      "success_criteria": [
+        3
+      ],
+      "blocked_by": [],
+      "context": "Four third-party systems sit entirely outside the EP apps, and the questions the team actually asks span them. Today reaching them means a manual export, which is a large part of the three person-hours spent before every meeting.",
+      "in_scope": [
+        "Jira and GitHub via Lakeflow Connect",
+        "SquashTM and Figma via their APIs",
+        "A daily-or-better schedule with no manual step"
+      ],
+      "out_of_scope": [
+        "Conforming the ingested data into silver, which is E4"
+      ],
+      "acceptance": [
+        "All four sources land on a schedule with no manual export step anywhere in the path.",
+        "GIVEN a working day passes, WHEN freshness is checked, THEN every source is under the 24-hour end-to-end latency requirement."
+      ],
+      "notes": [
+        "Target of Success Criterion #3. Stated volumes: about 20 PR merges per day, about 100 new Jira tickets per two-week sprint."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Data Ingestion",
+        "doc/SDCL_telemetry.md - Stated volumes and requirements"
+      ],
+      "jira_key": "EP-163",
+      "priority": "High"
+    },
+    {
+      "ref": "S3.1",
+      "parent": "E3",
+      "type": "Story",
+      "summary": "Ingest Jira issues and sprints via Lakeflow Connect",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3",
+        "jira-src",
+        "databricks"
+      ],
+      "week": "week-1",
+      "owner": "Kane",
+      "points": 3,
+      "success_criteria": [
+        3,
+        4
+      ],
+      "blocked_by": [],
+      "context": "Jira carries the requirements, the planned versus actual dates and the sprint structure. Without planned-versus-actual there is no answer to 'is this feature delayed', which is the PoC's headline question.",
+      "in_scope": [
+        "Configure the Databricks Jira connector",
+        "Ingest issues, sprints, status transitions and the fields needed for planned versus actual",
+        "Schedule a daily refresh"
+      ],
+      "out_of_scope": [
+        "Mapping Jira issues to features and pull requests, which is S4.2"
+      ],
+      "acceptance": [
+        "GIVEN the connector is scheduled, WHEN a sprint's worth of tickets is inspected, THEN roughly 100 new tickets per two-week sprint are present with no manual export.",
+        "Planned and actual dates and the status history needed to compute cycle time are both available.",
+        "A failed run is visible without anyone opening the pipeline by hand."
+      ],
+      "notes": [
+        "Connector documentation: Jira connector, Databricks on AWS.",
+        "Agree the projects and field set with the PM before the first full run, so the ingest does not have to be reconfigured mid-PoC."
+      ],
+      "references": [
+        "https://docs.databricks.com/aws/en/ingestion/lakeflow-connect/jira",
+        "doc/SDCL_telemetry.md - Data Ingestion"
+      ],
+      "jira_key": "EP-181",
+      "priority": "High"
+    },
+    {
+      "ref": "S3.2",
+      "parent": "E3",
+      "type": "Story",
+      "summary": "Ingest GitHub pull requests, reviews and code churn via Lakeflow Connect",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3",
+        "github-src",
+        "databricks"
+      ],
+      "week": "week-1",
+      "owner": "Kane",
+      "points": 3,
+      "success_criteria": [
+        3,
+        4
+      ],
+      "blocked_by": [],
+      "context": "GitHub supplies pull requests, review times and code churn - the engineering half of every delay question, and the target of the suspect-commit references BugZapper emits in S2.3.",
+      "in_scope": [
+        "Configure the Databricks GitHub connector",
+        "Ingest pull requests, reviews, commits and per-PR churn",
+        "Schedule a daily refresh"
+      ],
+      "out_of_scope": [
+        "Linking pull requests to Jira issues, which is S4.2"
+      ],
+      "acceptance": [
+        "GIVEN a day of normal activity, WHEN the ingested data is checked, THEN roughly 20 merged pull requests per day are present.",
+        "Review turnaround time is computable from the ingested fields alone.",
+        "Commit identifiers are in a form that joins to BugZapper suspect commits."
+      ],
+      "notes": [
+        "Connector documentation: GitHub connector, Databricks on AWS.",
+        "Confirm which repositories are in scope before the first run; ingesting everything makes the gold layer noisier, not richer."
+      ],
+      "references": [
+        "https://docs.databricks.com/aws/en/ingestion/lakeflow-connect/github-overview"
+      ],
+      "jira_key": "EP-182",
+      "priority": "High"
+    },
+    {
+      "ref": "S3.3",
+      "parent": "E3",
+      "type": "Story",
+      "summary": "Ingest SquashTM test executions and campaigns via its REST API",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3",
+        "squashtm"
+      ],
+      "week": "week-1",
+      "owner": "Delbert",
+      "points": 5,
+      "success_criteria": [
+        3,
+        4
+      ],
+      "blocked_by": [],
+      "context": "SquashTM has no Databricks connector, so this is a scheduled API job rather than a configuration exercise. Test execution records are what let the Test Lead's questions be answered from the same place as everyone else's.",
+      "in_scope": [
+        "Authenticate against the SquashTM API",
+        "Ingest manual and campaign execution records, including result and execution date",
+        "Land raw payloads in bronze and schedule the job daily",
+        "Handle pagination and incremental fetch"
+      ],
+      "out_of_scope": [
+        "Building test coverage metrics, which belongs to the Test Lead dashboard page in S6.4"
+      ],
+      "acceptance": [
+        "GIVEN the job is scheduled, WHEN it runs unattended, THEN new execution records land daily with no manual export.",
+        "GIVEN the API returns a page limit, WHEN a fetch exceeds it, THEN pagination is handled and no records are silently dropped.",
+        "Credentials are held in a secret scope, never in code or in the job definition.",
+        "A failed run surfaces as an alert rather than as an empty table noticed days later."
+      ],
+      "notes": [
+        "API documentation: Access documentation on APIs, Squash TM Documentation v7.",
+        "Estimated higher than the connector stories because retry, pagination and incremental logic are all hand-written here."
+      ],
+      "references": [
+        "https://tm-en.doc.squashtest.com/v7/install-guide/install-plugins/apis.html"
+      ],
+      "jira_key": "EP-183",
+      "priority": "High"
+    },
+    {
+      "ref": "S3.4",
+      "parent": "E3",
+      "type": "Story",
+      "summary": "Ingest Figma files, versions and comments via the Figma API",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3",
+        "figma-src"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        3,
+        9
+      ],
+      "blocked_by": [],
+      "context": "Figma holds the design files, versions and comments behind each specification. It is also the upstream signal for specification rework: when a frame changes, the specification derived from it may need redoing - which NetSpec's monitor already detects locally.",
+      "in_scope": [
+        "Ingest file metadata, version history and comments for the files in PoC scope",
+        "Schedule a daily refresh",
+        "Keep frame identifiers aligned with the frame_id values NetSpec telemetry already emits"
+      ],
+      "out_of_scope": [
+        "Ingesting design content or images"
+      ],
+      "acceptance": [
+        "GIVEN a designer publishes a new version, WHEN the next scheduled run completes, THEN the version and its comments are queryable.",
+        "Frame identifiers join to the frame_id values in NetSpec telemetry.",
+        "The Figma token is held in a secret scope and never appears in a log line."
+      ],
+      "notes": [
+        "NetSpec already emits figma_monitor_checked with added, removed and modified counts; the ingested version history is the authoritative counterpart."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md - Figma workflow",
+        "doc/SDCL_telemetry.md - Tools and systems in scope"
+      ],
+      "jira_key": "EP-184",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S3.5",
+      "parent": "E3",
+      "type": "Story",
+      "summary": "Monitor ingestion freshness against the 24-hour latency requirement",
+      "labels": [
+        "ep-poc",
+        "ingestion",
+        "sc-3",
+        "governance"
+      ],
+      "week": "week-2",
+      "owner": "Kane",
+      "points": 3,
+      "success_criteria": [
+        3
+      ],
+      "blocked_by": [
+        "S3.1",
+        "S3.2",
+        "S3.3",
+        "S3.4"
+      ],
+      "context": "The stated requirement is end-to-end latency under 24 hours and a refresh at least once per day. A silently stale source is worse than a missing one, because the dashboard keeps answering - just wrongly - and the PoC evaluation in Week 5 would be measuring the wrong thing.",
+      "in_scope": [
+        "A freshness check per source",
+        "An alert when a source exceeds its threshold",
+        "One view showing the last successful load per source"
+      ],
+      "out_of_scope": [
+        "Data quality rules beyond freshness"
+      ],
+      "acceptance": [
+        "GIVEN any source has not loaded for more than 24 hours, WHEN the check runs, THEN it alerts a named owner.",
+        "One query answers 'when did each of the seven sources last load'.",
+        "GIVEN a run fails, WHEN the dashboard is opened, THEN the staleness is visible on the page rather than only in the pipeline UI."
+      ],
+      "notes": [
+        "Cover the app telemetry export in the same check; it is subject to platform export lag and is just as capable of going quiet."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Stated volumes and requirements"
+      ],
+      "jira_key": "EP-185",
+      "priority": "Medium"
+    },
+    {
+      "ref": "E4",
+      "type": "Epic",
+      "summary": "Consolidate all seven sources under one medallion architecture and Unity Catalog",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "sc-5",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Kane",
+      "points": null,
+      "success_criteria": [
+        4,
+        5
+      ],
+      "blocked_by": [],
+      "context": "The PoC's actual argument is that user behaviour, tool output, code, tickets, designs and test results belong in one governed place, because the questions the team asks span all of them. 'Is this feature delayed, and why?' cannot be answered by Jira alone - the answer lives in the join.",
+      "in_scope": [
+        "Bronze, silver and gold layers in a single catalog",
+        "The entity keys that make the cross-system join possible",
+        "Unity Catalog access control per audience and end-to-end lineage"
+      ],
+      "out_of_scope": [
+        "The consumption surfaces - Genie in E5 and the dashboard in E6"
+      ],
+      "acceptance": [
+        "A single query answers a question spanning app telemetry, Jira, GitHub, test executions and RCA.",
+        "Lineage is traceable from raw app logs through to the gold layer.",
+        "Access is controlled per audience rather than granted broadly."
+      ],
+      "notes": [
+        "Targets Success Criteria #4 and #5."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Scope of this PoC",
+        "doc/SDCL_telemetry.md - Success Criteria #4 and #5"
+      ],
+      "jira_key": "EP-164",
+      "priority": "High"
+    },
+    {
+      "ref": "S4.1",
+      "parent": "E4",
+      "type": "Task",
+      "summary": "Define the catalog, schema and medallion naming standard",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Kane",
+      "points": 2,
+      "success_criteria": [
+        4
+      ],
+      "blocked_by": [],
+      "context": "Seven sources landing in one catalog need an agreed layout before the first silver table is written, otherwise the gold layer inherits seven naming conventions and Genie inherits the confusion.",
+      "in_scope": [
+        "Catalog and schema per layer and per source",
+        "Table and column naming rules",
+        "Where each of the seven sources lands at each layer"
+      ],
+      "out_of_scope": [
+        "Production catalog design; this is the PoC layout"
+      ],
+      "acceptance": [
+        "One page states, for each of the seven sources, its bronze, silver and gold location.",
+        "The existing ep_dev.netspec layout either fits the standard or is explicitly grandfathered with the reason recorded.",
+        "GIVEN a new source is added later, WHEN its location is chosen, THEN the standard decides it without a further meeting."
+      ],
+      "notes": [
+        "Do this before S4.2; renaming after the silver layer exists is avoidable rework."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Scope of this PoC",
+        "doc/sql/01_setup.sql"
+      ],
+      "jira_key": "EP-186",
+      "priority": "High"
+    },
+    {
+      "ref": "S4.2",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Establish the entity keys that link feature, Jira issue, PR, spec and test case",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Kane",
+      "points": 8,
+      "success_criteria": [
+        4,
+        9
+      ],
+      "blocked_by": [
+        "S3.1",
+        "S3.2",
+        "S3.3",
+        "S4.1",
+        "S8.2"
+      ],
+      "context": "This is the load-bearing story of the whole PoC. Every cross-system question - is this feature delayed and why, what did this specification cost, which design change caused this rework - reduces to whether a feature can be followed across Jira, GitHub, SquashTM, Figma and the EP apps. If this key does not hold, criteria #4, #6, #8 and #9 all fail, however good the individual ingests are.",
+      "in_scope": [
+        "Choose the canonical feature key and the resolution rules",
+        "Map Jira issue key to pull request, to specification feature_key, to test case, to Figma frame",
+        "A coverage report showing what fraction of each source resolves"
+      ],
+      "out_of_scope": [
+        "Master data management beyond the PoC scope"
+      ],
+      "acceptance": [
+        "GIVEN a feature in PoC scope, WHEN the mapping is queried, THEN its Jira issues, pull requests, specification versions, test executions and Figma frames are all reachable from one key.",
+        "The unresolved share per source is measured and reported, not left implicit.",
+        "GIVEN a record cannot be resolved, WHEN a gold aggregate is computed, THEN it is counted as unattributed rather than dropped silently.",
+        "The resolution rules are written down, including which conventions they rely on - branch naming, PR title, commit trailer."
+      ],
+      "notes": [
+        "Estimated at 8 because it depends on conventions the team may not follow consistently; if the first coverage measurement is poor, split into per-source resolution stories.",
+        "Measure coverage early - in Week 2 - because a low number is a scope conversation, not a bug fix."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - The argument is not an AI tool",
+        "doc/SDCL_telemetry.md - Success Criteria #4 and #9"
+      ],
+      "jira_key": "EP-187",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S4.3",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Build the silver layer conforming the seven sources",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Kane",
+      "points": 5,
+      "success_criteria": [
+        4
+      ],
+      "blocked_by": [
+        "S4.2"
+      ],
+      "context": "Bronze holds each source in its own shape. Silver is where they become comparable - one user identity, one timestamp convention, one feature key - so the gold layer and Genie are not each re-deriving the same fixes.",
+      "in_scope": [
+        "Deduplicate and type each source",
+        "Conform user identity across systems",
+        "Apply the entity keys from S4.2",
+        "Standardise on one event-time convention"
+      ],
+      "out_of_scope": [
+        "Role-specific aggregation, which is S4.4"
+      ],
+      "acceptance": [
+        "Each source has a silver table with conformed keys and a documented grain.",
+        "GIVEN the same person acts in Jira, GitHub and an EP app, WHEN silver is queried, THEN they resolve to one identity.",
+        "Ordering and time windows use ingest or receive time, not client clocks; the reason is recorded in the column comment."
+      ],
+      "notes": [
+        "Browser event_time is a client clock and can be skewed; received_at is the reliable ordering column. The same rule then goes into the Genie instructions in S5.2."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 7",
+        "doc/sql/03_views.sql"
+      ],
+      "jira_key": "EP-188",
+      "priority": "High"
+    },
+    {
+      "ref": "S4.4",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Build the gold marts serving the four roles",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "Kane",
+      "points": 5,
+      "success_criteria": [
+        4,
+        8
+      ],
+      "blocked_by": [
+        "S4.3",
+        "S5.1"
+      ],
+      "context": "The four roles ask different questions of the same data. Gold is where those questions become tables, so that both Genie and the dashboard read one definition of cycle time rather than two.",
+      "in_scope": [
+        "A mart per role: PM, Dev Lead, Test Lead, EP Team",
+        "Shared metric definitions - cycle time, review turnaround, rework, test pass rate, app adoption",
+        "Column comments on everything, because Genie depends on them"
+      ],
+      "out_of_scope": [
+        "Dashboard layout, which is E6"
+      ],
+      "acceptance": [
+        "Each of the four roles has a gold mart matching the questions collected in S5.1.",
+        "GIVEN a metric is used by two roles, WHEN both are queried, THEN they resolve to one definition in one place.",
+        "Every gold table and column carries a comment."
+      ],
+      "notes": [
+        "Sequenced after S5.1 deliberately: building marts before the role questions are written down produces marts nobody asked for."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #6 and #8"
+      ],
+      "jira_key": "EP-189",
+      "priority": "High"
+    },
+    {
+      "ref": "S4.5",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Apply Unity Catalog access control per audience",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-5",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "Kane",
+      "points": 3,
+      "success_criteria": [
+        5
+      ],
+      "blocked_by": [
+        "S4.1"
+      ],
+      "context": "Criterion #5 requires access controlled per audience. This matters more than usual here, because app telemetry is per-person behavioural data: who hesitated, who abandoned, who re-asked. Broad access to that is a different proposition from broad access to sprint metrics.",
+      "in_scope": [
+        "Groups per audience: PM, Dev Lead, Test Lead, EP Team, app service principals",
+        "Grants at catalog, schema and table level",
+        "A decision on who may see per-person telemetry versus aggregates only"
+      ],
+      "out_of_scope": [
+        "Row-level security beyond what the PoC needs"
+      ],
+      "acceptance": [
+        "GIVEN a member of one audience, WHEN they query outside their grant, THEN access is denied.",
+        "App service principals hold only what they need to write telemetry.",
+        "The per-person versus aggregate decision for behavioural data is recorded on the ticket with its reasoning.",
+        "Grants are expressed as group grants, not as individual user grants."
+      ],
+      "notes": [
+        "Raise the per-person question with the EP team early. It is a policy decision and it shapes both the Genie space and the dashboard."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #5",
+        "doc/SDCL_telemetry_deployment.md - section 6"
+      ],
+      "jira_key": "EP-190",
+      "priority": "High"
+    },
+    {
+      "ref": "S4.6",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Demonstrate end-to-end lineage from raw app logs to the gold layer",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-5",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "Kane",
+      "points": 2,
+      "success_criteria": [
+        5
+      ],
+      "blocked_by": [
+        "S4.4"
+      ],
+      "context": "Criterion #5 names lineage explicitly. It is also what makes a wrong number on the dashboard diagnosable in minutes instead of a morning.",
+      "in_scope": [
+        "Confirm lineage is captured across bronze, silver and gold",
+        "Capture the lineage graph as evidence for the Week 5 evaluation"
+      ],
+      "out_of_scope": [
+        "Lineage for objects outside the PoC catalog"
+      ],
+      "acceptance": [
+        "GIVEN a gold column, WHEN its lineage is followed, THEN it is traceable back to the raw app log or source ingest that produced it.",
+        "The lineage evidence is attached to this ticket.",
+        "GIVEN a step is not captured, WHEN the gap is found, THEN the reason is recorded rather than left as a blank in the evaluation."
+      ],
+      "notes": [
+        "Views defined outside the pipeline may not appear in lineage; check the ones added by hand in S1.2."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #5"
+      ],
+      "jira_key": "EP-191",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S4.7",
+      "parent": "E4",
+      "type": "Story",
+      "summary": "Answer one question with a single query spanning five systems",
+      "labels": [
+        "ep-poc",
+        "governance",
+        "sc-4",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "Kane",
+      "points": 3,
+      "success_criteria": [
+        4
+      ],
+      "blocked_by": [
+        "S4.4"
+      ],
+      "context": "This is the acceptance test for criterion #4 and the clearest demonstration of the PoC's argument: one statement touching app telemetry, Jira, GitHub, test executions and RCA, answering something none of them answers alone.",
+      "in_scope": [
+        "Agree the question with the PM - 'is this feature delayed, and why' is the candidate",
+        "Write the query",
+        "Record the result as evaluation evidence"
+      ],
+      "out_of_scope": [
+        "Turning it into a dashboard tile, which is E6"
+      ],
+      "acceptance": [
+        "GIVEN the agreed question, WHEN one SQL statement runs, THEN it returns an answer drawing on all five sources.",
+        "The PM confirms the answer is the one they would have assembled by hand.",
+        "The query is saved as an example in the Genie space in S5.2."
+      ],
+      "notes": [
+        "Reuse this query as a Genie example; it is the single highest-value thing to teach the space."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #4"
+      ],
+      "jira_key": "EP-192",
+      "priority": "High"
+    },
+    {
+      "ref": "E5",
+      "type": "Epic",
+      "summary": "Self-serve analytics through Genie for the four roles",
+      "labels": [
+        "ep-poc",
+        "genie",
+        "sc-6",
+        "sc-7",
+        "databricks"
+      ],
+      "week": "week-4",
+      "owner": "TBD",
+      "points": null,
+      "success_criteria": [
+        6,
+        7
+      ],
+      "blocked_by": [],
+      "context": "Before every project meeting the PM, Dev Lead and Test Lead each spend roughly an hour assembling information from Jira, GitHub, test reports and RCA output - about three person-hours per sprint per feature team, producing no reusable asset. Genie is how that assembly stops being manual.",
+      "in_scope": [
+        "Collect the standing questions per role",
+        "Configure and teach the Genie space",
+        "Evaluate answer correctness with the roles themselves",
+        "Measure the preparation time before and after"
+      ],
+      "out_of_scope": [
+        "The dashboard, which is E6"
+      ],
+      "acceptance": [
+        "Each of the four roles gets correct answers to their own questions in natural language, without writing SQL, judged by the asking role.",
+        "Meeting preparation falls from about one hour per role to under 15 minutes per role.",
+        "The underlying data is reusable by every other role and retained for trend analysis."
+      ],
+      "notes": [
+        "Targets Success Criteria #6 and #7."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - The baseline today",
+        "doc/SDCL_telemetry.md - Success Criteria #6 and #7"
+      ],
+      "jira_key": "EP-165",
+      "priority": "High"
+    },
+    {
+      "ref": "S5.1",
+      "parent": "E5",
+      "type": "Story",
+      "summary": "Collect the standing questions from PM, Dev Lead, Test Lead and EP team",
+      "labels": [
+        "ep-poc",
+        "genie",
+        "sc-6"
+      ],
+      "week": "week-2",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        6,
+        8
+      ],
+      "blocked_by": [],
+      "context": "Criterion #6 is judged by whether each role gets a correct answer to their own question, and criterion #8 by whether each role confirms their dashboard page answers their standing questions. Neither can be evaluated until those questions are written down. This story is deliberately early: it also decides what the gold marts in S4.4 have to contain.",
+      "in_scope": [
+        "Interview each of the four roles",
+        "Write down five to ten standing questions per role, in their words",
+        "Record for each question which systems it spans and how the role answers it manually today"
+      ],
+      "out_of_scope": [
+        "Implementing answers, which is S5.2 and E6"
+      ],
+      "acceptance": [
+        "Each of the four roles has their questions recorded, phrased as they say them rather than as a data model.",
+        "Each question is tagged with the systems it needs, which validates or challenges the entity key work in S4.2.",
+        "For each question, today's manual effort is noted, giving the baseline for criterion #7.",
+        "The four role questions referenced by criterion #6 are among them."
+      ],
+      "notes": [
+        "This is the highest-leverage ticket in the epic. Building marts or a Genie space before it produces work that answers questions nobody asked.",
+        "Keep the raw wording; it becomes the Genie evaluation set in S5.3."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #6",
+        "doc/SDCL_telemetry.md - The baseline today"
+      ],
+      "jira_key": "EP-193",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S5.2",
+      "parent": "E5",
+      "type": "Story",
+      "summary": "Configure the Genie space with comments, instructions and example SQL",
+      "labels": [
+        "ep-poc",
+        "genie",
+        "sc-6",
+        "databricks"
+      ],
+      "week": "week-4",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        6
+      ],
+      "blocked_by": [
+        "S4.4",
+        "S5.1"
+      ],
+      "context": "A Genie space is only as good as what it is taught. Table and column comments, explicit instructions and example SQL are what turn a plausible-looking answer into a correct one.",
+      "in_scope": [
+        "Add the gold marts and the four telemetry views to the space",
+        "Write the instructions",
+        "Add example SQL, including the cross-system query from S4.7",
+        "Document how to correct a wrong answer"
+      ],
+      "out_of_scope": [
+        "Role acceptance, which is S5.3"
+      ],
+      "acceptance": [
+        "The space contains the gold marts plus v_app_events, v_spec_versions, v_ai_cost_by_stage and v_sessions.",
+        "The instructions state at least: start from v_app_events rather than otel_logs or app_events; order and window on received_at because event_time is a browser clock; properties is a JSON string read with properties:key::type.",
+        "GIVEN Genie answers a question wrongly, WHEN the correction procedure is followed, THEN the corrected answer persists for the next asker.",
+        "Every table in the space has a description that explains its grain."
+      ],
+      "notes": [
+        "01_setup.sql and 03_views.sql already carry table and column comments, so the telemetry half of this is mostly assembly."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_deployment.md - section 7"
+      ],
+      "jira_key": "EP-194",
+      "priority": "High"
+    },
+    {
+      "ref": "S5.3",
+      "parent": "E5",
+      "type": "Story",
+      "summary": "Run role acceptance on the Genie space with an evaluation set",
+      "labels": [
+        "ep-poc",
+        "genie",
+        "sc-6"
+      ],
+      "week": "week-4",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        6
+      ],
+      "blocked_by": [
+        "S5.2"
+      ],
+      "context": "Criterion #6 is explicit that the asking role judges correctness. A demo where the space answers questions chosen by the person who configured it proves nothing.",
+      "in_scope": [
+        "Turn the S5.1 questions into an evaluation set with expected answers",
+        "Have each role ask their own questions unaided",
+        "Record pass and fail per question and feed failures back into S5.2"
+      ],
+      "out_of_scope": [
+        "Broad rollout beyond the pilot group"
+      ],
+      "acceptance": [
+        "GIVEN a role asks their own question in natural language, WHEN Genie answers, THEN that role judges the answer correct - recorded per question, with the failures listed too.",
+        "No role wrote SQL to get their answer.",
+        "Each failure has either a fix in the space or a written reason why the data cannot answer it yet."
+      ],
+      "notes": [
+        "Record the failures honestly; they are the most useful input to the Week 5 evaluation and to any production rollout decision."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #6",
+        "doc/SDCL_telemetry.md - Timeline Week 4"
+      ],
+      "jira_key": "EP-195",
+      "priority": "High"
+    },
+    {
+      "ref": "S5.4",
+      "parent": "E5",
+      "type": "Story",
+      "summary": "Measure meeting preparation time before and after",
+      "labels": [
+        "ep-poc",
+        "genie",
+        "sc-7"
+      ],
+      "week": "week-4",
+      "owner": "PM",
+      "points": 2,
+      "success_criteria": [
+        7
+      ],
+      "blocked_by": [
+        "S5.3"
+      ],
+      "context": "Criterion #7 is the PoC's business case: three person-hours per sprint per feature team, replaced by under 15 minutes per role. It is the number that decides production rollout, so it needs measuring rather than estimating.",
+      "in_scope": [
+        "Record the current preparation time per role for one meeting",
+        "Record it again after the Genie space and dashboard are live",
+        "Confirm the output is reusable and retained"
+      ],
+      "out_of_scope": [
+        "Extending the measurement to teams outside the PoC"
+      ],
+      "acceptance": [
+        "GIVEN a role prepares for a project meeting using Genie and the dashboard, WHEN their time is measured, THEN it is under 15 minutes.",
+        "The before-measurement is a real observation, not the doc's three-hour estimate repeated back.",
+        "The prepared material is reusable by other roles and retained for trend analysis, rather than being thrown away as today's manual assembly is."
+      ],
+      "notes": [
+        "Measure the same meeting and the same roles before and after, otherwise the comparison proves nothing."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - The baseline today",
+        "doc/SDCL_telemetry.md - Success Criteria #7"
+      ],
+      "jira_key": "EP-196",
+      "priority": "High"
+    },
+    {
+      "ref": "E6",
+      "type": "Epic",
+      "summary": "Role-based engineering productivity dashboard",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "sc-9",
+        "polaris"
+      ],
+      "week": "week-3",
+      "owner": "TBD",
+      "points": null,
+      "success_criteria": [
+        8,
+        9
+      ],
+      "blocked_by": [],
+      "context": "One dashboard reflecting the whole SDLC, with a page per role, is criterion #8. Criterion #9 adds the cross-app view: for one feature, NetSpec specification activity and BugZapper RCA activity on a single timeline.",
+      "in_scope": [
+        "Deploy Polaris as a Databricks App",
+        "Four role pages",
+        "The cross-app feature timeline",
+        "Switch the data source to Databricks tables and embed Genie"
+      ],
+      "out_of_scope": [
+        "Genie space configuration itself, which is E5"
+      ],
+      "acceptance": [
+        "Four pages are live and each role confirms their page answers their standing questions.",
+        "For a given feature, NetSpec specification activity and BugZapper RCA activity appear on one timeline."
+      ],
+      "notes": [
+        "Targets Success Criteria #8 and #9."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #8 and #9",
+        "doc/SDCL_telemetry.md - Timeline Week 3"
+      ],
+      "jira_key": "EP-166",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.1",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Deploy Polaris to Databricks Apps and switch its data source to Databricks tables",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "polaris",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "TBD",
+      "points": 5,
+      "success_criteria": [
+        8
+      ],
+      "blocked_by": [
+        "S4.4"
+      ],
+      "context": "NetSpec and BugZapper already run as Databricks Apps; Polaris is planned to follow. Deploying it is what makes managed hosting, credential pass-through and platform-injected identity available to the dashboard - and it is the precondition for instrumenting Polaris in S1.8.",
+      "in_scope": [
+        "Deploy Polaris as a Databricks App",
+        "Repoint its queries from its current source to the gold marts",
+        "Verify credential pass-through works for a non-admin user"
+      ],
+      "out_of_scope": [
+        "Polaris telemetry, which is S1.8",
+        "Page content, which is S6.2 to S6.5"
+      ],
+      "acceptance": [
+        "GIVEN a role opens the deployed Polaris URL, WHEN a page loads, THEN its data comes from the gold marts in Unity Catalog.",
+        "GIVEN a non-admin user opens it, WHEN they query, THEN they see exactly what their Unity Catalog grants allow, with no separate credential handling in the app.",
+        "The app is reachable at a Databricks App URL rather than a local or tunnelled one."
+      ],
+      "notes": [
+        "Access must resolve through the grants defined in S4.5; a dashboard that reads with elevated privileges would defeat criterion #5."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline Week 3",
+        "doc/SDCL_telemetry.md - Success Criteria #5 and #8"
+      ],
+      "jira_key": "EP-197",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.2",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Build the PM dashboard page",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "polaris"
+      ],
+      "week": "week-3",
+      "owner": "PM",
+      "points": 3,
+      "success_criteria": [
+        8
+      ],
+      "blocked_by": [
+        "S6.1",
+        "S5.1"
+      ],
+      "context": "The PM's standing question is delivery: is this feature delayed, and why. Answering it needs Jira planned versus actual, the GitHub work underneath and the test evidence - which is exactly the join the PoC exists to prove.",
+      "in_scope": [
+        "A page built from the PM gold mart",
+        "Planned versus actual per feature",
+        "A drill-through from a delayed feature to the reason"
+      ],
+      "out_of_scope": [
+        "Metrics belonging to other roles"
+      ],
+      "acceptance": [
+        "GIVEN the PM opens their page, WHEN they look for a delayed feature, THEN they can see both that it is delayed and what is holding it up, without leaving the page.",
+        "The PM confirms the page answers the standing questions recorded in S5.1.",
+        "Every figure on the page traces to a gold mart column, not to a query written inline in the page."
+      ],
+      "notes": [
+        "Review with the PM while building, not after; criterion #8 is confirmed by the role, not by the builder."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #8"
+      ],
+      "jira_key": "EP-198",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.3",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Build the Dev Lead dashboard page",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "polaris",
+        "github-src"
+      ],
+      "week": "week-3",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        8
+      ],
+      "blocked_by": [
+        "S6.1",
+        "S5.1"
+      ],
+      "context": "The Dev Lead's questions are about flow through code review: where pull requests wait, how much churn a feature is taking, and which defects trace back to which commits.",
+      "in_scope": [
+        "A page built from the Dev Lead gold mart",
+        "Review turnaround and code churn",
+        "Suspect-commit linkage from BugZapper RCA"
+      ],
+      "out_of_scope": [
+        "Individual developer performance metrics"
+      ],
+      "acceptance": [
+        "GIVEN the Dev Lead opens their page, WHEN they look at the current sprint, THEN review turnaround and churn are visible per feature.",
+        "GIVEN an RCA identified suspect commits, WHEN the page is opened, THEN those commits are reachable from the defect.",
+        "The Dev Lead confirms the page answers the standing questions recorded in S5.1."
+      ],
+      "notes": [
+        "Keep the framing at feature and flow level. Per-person throughput metrics are out of scope and would change the access conversation in S4.5."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #8"
+      ],
+      "jira_key": "EP-199",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.4",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Build the Test Lead dashboard page",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "polaris",
+        "squashtm"
+      ],
+      "week": "week-3",
+      "owner": "Delbert",
+      "points": 3,
+      "success_criteria": [
+        8
+      ],
+      "blocked_by": [
+        "S6.1",
+        "S5.1",
+        "S3.3"
+      ],
+      "context": "The Test Lead's questions are about coverage and confidence: what has been executed, what passed, and which features are still untested as the sprint closes.",
+      "in_scope": [
+        "A page built from the Test Lead gold mart",
+        "Execution and pass rate by feature and campaign",
+        "Untested features in the current sprint"
+      ],
+      "out_of_scope": [
+        "Test case authoring workflows"
+      ],
+      "acceptance": [
+        "GIVEN the Test Lead opens their page, WHEN the sprint is in progress, THEN execution and pass rate are visible per feature.",
+        "GIVEN a feature has no execution record, WHEN the page is opened, THEN it is visible as untested rather than absent from the page.",
+        "The Test Lead confirms the page answers the standing questions recorded in S5.1."
+      ],
+      "notes": [
+        "Features with no test executions are the point of the page; make sure the join does not drop them."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #8"
+      ],
+      "jira_key": "EP-200",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.5",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Build the EP Team dashboard page",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-8",
+        "polaris",
+        "telemetry"
+      ],
+      "week": "week-3",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        8,
+        1
+      ],
+      "blocked_by": [
+        "S6.1",
+        "S5.1"
+      ],
+      "context": "The EP team's questions are about their own products: which features go unused, which steps users abandon, where users wait, and how often an answer has to be asked twice. This page is the one that only exists because of the telemetry in E1.",
+      "in_scope": [
+        "A page built from the EP Team gold mart",
+        "Funnel and abandonment",
+        "Per-step wait time from pipeline_step_completed duration",
+        "Re-ask and rework counts",
+        "Feature and panel adoption"
+      ],
+      "out_of_scope": [
+        "Per-person behavioural detail, subject to the access decision in S4.5"
+      ],
+      "acceptance": [
+        "GIVEN the EP team opens their page, WHEN they look at a workflow, THEN they can see where users drop out and how long each step made them wait.",
+        "Re-asks and rework are visible as counts, since they are the clearest signal that an answer did not land.",
+        "The page respects the per-person versus aggregate decision from S4.5.",
+        "The EP team confirms the page answers the standing questions recorded in S5.1."
+      ],
+      "notes": [
+        "The signals are already in the event dictionary: left_while_running and stream_disconnected for abandonment, spec_exported for value, example_requirement_used for hesitation, pipeline_step_completed duration_ms for waiting."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md",
+        "doc/sql/04_verify.sql - section 4"
+      ],
+      "jira_key": "EP-201",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.6",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Show NetSpec and BugZapper activity for one feature on a single timeline",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "sc-9",
+        "netspec",
+        "bugzapper"
+      ],
+      "week": "week-4",
+      "owner": "TBD",
+      "points": 5,
+      "success_criteria": [
+        9
+      ],
+      "blocked_by": [
+        "S1.7",
+        "S2.3",
+        "S4.2"
+      ],
+      "context": "Criterion #9 asks how the EP apps are used together across one feature's lifecycle. The value is in the sequence: a specification version, then the pull requests, then an RCA that points back at a commit from those pull requests - visible as one story rather than as two tool logs.",
+      "in_scope": [
+        "A feature-scoped timeline combining NetSpec specification activity and BugZapper RCA activity",
+        "The Figma workflow on the same timeline where a feature has one"
+      ],
+      "out_of_scope": [
+        "Polaris usage on the timeline, until S1.8 lands"
+      ],
+      "acceptance": [
+        "GIVEN a feature in PoC scope, WHEN its timeline is opened, THEN NetSpec specification activity and BugZapper RCA activity appear on one axis, in order.",
+        "Ordering uses received_at rather than the browser clock.",
+        "GIVEN an event cannot be attributed to the feature, WHEN the timeline renders, THEN it is excluded consistently and the exclusion is visible rather than silent."
+      ],
+      "notes": [
+        "Section 5 of 04_verify.sql already puts the text and Figma workflows on one timeline within NetSpec; extending it across apps is the same shape once BugZapper emits the shared contract.",
+        "Depends on the entity key from S4.2 holding for this feature."
+      ],
+      "references": [
+        "doc/sql/04_verify.sql - section 5",
+        "doc/SDCL_telemetry.md - Success Criteria #9"
+      ],
+      "jira_key": "EP-202",
+      "priority": "High"
+    },
+    {
+      "ref": "S6.7",
+      "parent": "E6",
+      "type": "Story",
+      "summary": "Embed the Genie space in the dashboard app",
+      "labels": [
+        "ep-poc",
+        "dashboard",
+        "genie",
+        "sc-6",
+        "sc-8",
+        "polaris"
+      ],
+      "week": "week-4",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [
+        6,
+        8
+      ],
+      "blocked_by": [
+        "S5.2",
+        "S6.1"
+      ],
+      "context": "A dashboard answers the questions anticipated when it was built; Genie answers the follow-up. Embedding the space in the dashboard is what keeps a role from leaving the page - and from going back to assembling the answer by hand.",
+      "in_scope": [
+        "Embed Genie in Polaris",
+        "Preserve the acting user's identity so answers respect their grants",
+        "Pass the page context into the space where possible"
+      ],
+      "out_of_scope": [
+        "Building a chat UI of our own"
+      ],
+      "acceptance": [
+        "GIVEN a role is on their dashboard page, WHEN they ask a follow-up question in the embedded space, THEN they get an answer without leaving the app.",
+        "GIVEN two roles with different grants ask the same question, WHEN each gets an answer, THEN each sees only data their grants allow.",
+        "The embed survives a page reload without a second sign-in."
+      ],
+      "notes": [
+        "Identity must remain the platform-injected one; anything else would break both criterion #5 and the audit story."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline Week 3",
+        "doc/SDCL_telemetry.md - Success Criteria #6"
+      ],
+      "jira_key": "EP-203",
+      "priority": "Medium"
+    },
+    {
+      "ref": "E7",
+      "type": "Epic",
+      "summary": "AI development cost visibility by SDLC stage",
+      "labels": [
+        "ep-poc",
+        "finops",
+        "sc-10",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": null,
+      "success_criteria": [
+        10
+      ],
+      "blocked_by": [],
+      "context": "Criterion #10 asks for Claude token usage attributable by SDLC stage with no instrumentation in any app, available from platform system tables because model calls route through the Databricks-hosted Anthropic endpoint. Today the metric exists but comes from app telemetry rather than system tables.",
+      "in_scope": [
+        "Route model calls through the Databricks-hosted endpoint",
+        "Join platform system tables with the SDLC stage dimension",
+        "Close the known cost blind spots"
+      ],
+      "out_of_scope": [
+        "Chargeback or budgeting processes"
+      ],
+      "acceptance": [
+        "Token usage and cost by SDLC stage are available, with the authoritative numbers coming from platform system tables.",
+        "No calling site anywhere in the apps carries cost instrumentation.",
+        "The blind spots are either closed or documented."
+      ],
+      "notes": [
+        "Status is nuanced and should be reported precisely in Week 5: the metric is available, the data source has not yet moved to system tables."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Success Criteria #10",
+        "doc/SDCL_telemetry_acceptance.md - honest note on criterion #10"
+      ],
+      "jira_key": "EP-167",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S7.1",
+      "parent": "E7",
+      "type": "Story",
+      "summary": "Route model calls through the Databricks-hosted Anthropic endpoint",
+      "labels": [
+        "ep-poc",
+        "finops",
+        "sc-10",
+        "netspec",
+        "databricks"
+      ],
+      "week": "week-2",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        10
+      ],
+      "blocked_by": [],
+      "context": "This is the single change that turns criterion #10 from partially met into met. The apps already support the databricks: provider prefix, so the work is configuration plus verification rather than a rewrite. Once calls route through the platform endpoint, system tables carry authoritative token and cost figures.",
+      "in_scope": [
+        "Point the LLM_* environment variables at databricks:-prefixed models",
+        "Verify behaviour and latency are unchanged",
+        "Confirm usage appears in platform system tables"
+      ],
+      "out_of_scope": [
+        "Changing prompts or model selection logic"
+      ],
+      "acceptance": [
+        "GIVEN a pipeline runs after the switch, WHEN the platform system tables are queried, THEN that run's token usage is present.",
+        "Application behaviour is unchanged: same outputs, no new failure mode, latency within the previous range.",
+        "GIVEN the endpoint is unavailable, WHEN a call fails, THEN the failure is visible rather than silently falling back to the old provider."
+      ],
+      "notes": [
+        "The provider is already implemented; this is an environment change, which is why it is estimated at 3 rather than 8.",
+        "Run it in dev first - a model routing change touches every AI path in the product."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_acceptance.md - honest note on criterion #10",
+        "doc/SDCL_telemetry.md - Success Criteria #10"
+      ],
+      "jira_key": "EP-204",
+      "priority": "High"
+    },
+    {
+      "ref": "S7.2",
+      "parent": "E7",
+      "type": "Story",
+      "summary": "Join platform system tables with the SDLC stage dimension",
+      "labels": [
+        "ep-poc",
+        "finops",
+        "sc-10",
+        "databricks"
+      ],
+      "week": "week-3",
+      "owner": "Angelina",
+      "points": 3,
+      "success_criteria": [
+        10
+      ],
+      "blocked_by": [
+        "S7.1"
+      ],
+      "context": "System tables know what was spent; they cannot know which SDLC stage spent it. The llm_call events carry that dimension - step, tool, model, user and session - with no instrumentation at any calling site, because they are emitted from the single path every model call already passes through. The final form is the two joined.",
+      "in_scope": [
+        "Join system table usage to llm_call on the identifying attributes",
+        "Extend v_ai_cost_by_stage to read authoritative cost",
+        "Report the residual difference between the two sources"
+      ],
+      "out_of_scope": [
+        "Removing the estimated cost path before the joined one is proven"
+      ],
+      "acceptance": [
+        "GIVEN a completed pipeline run, WHEN cost by SDLC stage is queried, THEN the amount comes from system tables and the stage from llm_call.",
+        "The gap between estimated and authoritative cost is quantified rather than assumed small.",
+        "GIVEN a system table row cannot be matched to a stage, WHEN the view is queried, THEN it appears as unattributed rather than being dropped."
+      ],
+      "notes": [
+        "cost_usd from cost.py PRICES is a public list-price estimate; keep it until the joined figure is proven, then note which one the dashboard shows."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md - llm_call",
+        "doc/sql/04_verify.sql - section 3"
+      ],
+      "jira_key": "EP-205",
+      "priority": "High"
+    },
+    {
+      "ref": "S7.3",
+      "parent": "E7",
+      "type": "Task",
+      "summary": "Route /api/translate through llm_client to close its cost blind spot",
+      "labels": [
+        "ep-poc",
+        "finops",
+        "sc-10",
+        "netspec"
+      ],
+      "week": "week-3",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        10
+      ],
+      "blocked_by": [],
+      "context": "/api/translate constructs its own client and bypasses llm_client entirely, so translation spend produces no llm_call event and is invisible to both v_ai_cost_by_stage and the older cost report. It is pre-existing behaviour, but it makes the cost figure quietly incomplete.",
+      "in_scope": [
+        "Route the translate endpoint through llm_client",
+        "Confirm an llm_call event is emitted with the right SDLC step"
+      ],
+      "out_of_scope": [
+        "Changing translation behaviour or the model it uses"
+      ],
+      "acceptance": [
+        "GIVEN a specification is translated, WHEN v_ai_cost_by_stage is queried, THEN the translation cost is present and attributed to a step.",
+        "Translation output is unchanged.",
+        "The old cost report and the new view agree on translation spend."
+      ],
+      "notes": [
+        "Small and self-contained, but it should land before Week 5 or the reported total is understated by an unknown amount."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md - llm_call exception",
+        "doc/SDCL_telemetry_deployment.md - section 8"
+      ],
+      "jira_key": "EP-206",
+      "priority": "Medium"
+    },
+    {
+      "ref": "S7.4",
+      "parent": "E7",
+      "type": "Task",
+      "summary": "Attribute Figma legacy endpoint cost to a session or document the gap",
+      "labels": [
+        "ep-poc",
+        "finops",
+        "sc-10",
+        "netspec",
+        "figma-src"
+      ],
+      "week": "week-3",
+      "owner": "Angelina",
+      "points": 2,
+      "success_criteria": [
+        10
+      ],
+      "blocked_by": [],
+      "context": "Three stateless Figma endpoints have no pipeline session to bind to, so their llm_call rows carry user and step but no app_session_id. Cost per user and per stage still answers; cost per specification does not, and the per-specification query silently excludes them via an inner join.",
+      "in_scope": [
+        "Either give those endpoints a bindable session, or record the gap explicitly",
+        "Make the exclusion visible in the per-specification cost query"
+      ],
+      "out_of_scope": [
+        "Rewriting the legacy endpoints into the pipeline"
+      ],
+      "acceptance": [
+        "GIVEN cost per specification is queried, WHEN rows are excluded for lack of a session, THEN the excluded amount is reported alongside the result rather than vanishing.",
+        "The decision - bind or document - is recorded on the ticket.",
+        "GIVEN the team chooses to bind, WHEN one of the three endpoints is called, THEN its llm_call carries app_session_id."
+      ],
+      "notes": [
+        "The affected endpoints are /figma/story/question, /figma/story/stream and /figma/stories/generate-one.",
+        "Documenting the gap is an acceptable outcome for a PoC; leaving it silently excluded is not."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_events.md - binding coverage table"
+      ],
+      "jira_key": "EP-207",
+      "priority": "Low"
+    },
+    {
+      "ref": "E8",
+      "type": "Epic",
+      "summary": "PoC enablement, evaluation and rollout decision",
+      "labels": [
+        "ep-poc",
+        "enablement"
+      ],
+      "week": "week-0",
+      "owner": "TBD",
+      "points": null,
+      "success_criteria": [],
+      "blocked_by": [],
+      "context": "The wrapper around the PoC: the pre-work that has to be done before Week 1 can start, and the Week 5 evaluation that decides whether this becomes production.",
+      "in_scope": [
+        "Scope and timeline sign-off",
+        "Dev and PROD workspace creation",
+        "The Week 5 evaluation against all ten success criteria",
+        "The rollout recommendation"
+      ],
+      "out_of_scope": [
+        "Production rollout itself, which is a separate initiative if approved"
+      ],
+      "acceptance": [
+        "Every one of the ten success criteria has a recorded result with evidence.",
+        "A rollout recommendation exists and is backed by the measured numbers."
+      ],
+      "notes": [
+        "Covers the Pre-work row and the Week 5 row of the timeline."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline"
+      ],
+      "jira_key": "EP-168",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S8.1",
+      "parent": "E8",
+      "type": "Task",
+      "summary": "Create the Dev and PROD Databricks workspaces",
+      "labels": [
+        "ep-poc",
+        "enablement",
+        "databricks"
+      ],
+      "week": "week-0",
+      "owner": "TBD",
+      "points": 2,
+      "success_criteria": [],
+      "blocked_by": [],
+      "context": "Pre-work item. Everything in E1 to E7 lands in these workspaces, so this blocks the whole PoC.",
+      "in_scope": [
+        "Create both workspaces",
+        "Confirm Unity Catalog is enabled",
+        "Confirm each team member can sign in and each app can be deployed"
+      ],
+      "out_of_scope": [
+        "Production hardening of the PROD workspace"
+      ],
+      "acceptance": [
+        "Both workspaces exist with Unity Catalog enabled.",
+        "GIVEN a team member signs in, WHEN they open the workspace, THEN they can create a schema and deploy an app.",
+        "Which workspace the PoC develops in - and which one the Week 5 demo runs in - is decided and recorded."
+      ],
+      "notes": [
+        "The SQL files default to the ep_dev catalog, which assumes the dev workspace; align the naming here rather than editing files later."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline Pre-work",
+        "doc/sql/01_setup.sql"
+      ],
+      "jira_key": "EP-208",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S8.2",
+      "parent": "E8",
+      "type": "Task",
+      "summary": "Confirm PoC scope and timeline with the team",
+      "labels": [
+        "ep-poc",
+        "enablement"
+      ],
+      "week": "week-0",
+      "owner": "PM",
+      "points": 1,
+      "success_criteria": [],
+      "blocked_by": [],
+      "context": "Pre-work item: align on the timeline and the PoC scope, and confirm which of the seven systems and which feature teams are actually in scope for the five weeks.",
+      "in_scope": [
+        "Sign off the scope and the five-week timeline",
+        "Name the owner of each of the ten success criteria",
+        "Agree which features and repositories the PoC covers"
+      ],
+      "out_of_scope": [
+        "Re-negotiating the success criteria themselves"
+      ],
+      "acceptance": [
+        "Each of the ten success criteria has a named owner.",
+        "The set of features, repositories and Jira projects in scope is written down, since it determines what S4.2 has to resolve.",
+        "The team has confirmed the five-week timeline is achievable given other commitments."
+      ],
+      "notes": [
+        "Doing this properly is what keeps S4.2 from discovering in Week 2 that half the data is out of scope."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline Pre-work"
+      ],
+      "jira_key": "EP-209",
+      "priority": "Highest"
+    },
+    {
+      "ref": "S8.3",
+      "parent": "E8",
+      "type": "Story",
+      "summary": "Record the Week 5 evaluation against all ten success criteria",
+      "labels": [
+        "ep-poc",
+        "enablement"
+      ],
+      "week": "week-5",
+      "owner": "TBD",
+      "points": 3,
+      "success_criteria": [],
+      "blocked_by": [
+        "S1.5",
+        "S2.4",
+        "S3.5",
+        "S4.7",
+        "S5.4",
+        "S6.6",
+        "S7.2"
+      ],
+      "context": "Week 5 is Evaluation: review results against the success criteria and, if met, plan production rollout. The value of the record is in its precision - a criterion that is half met should be recorded as half met, with the half that is missing named.",
+      "in_scope": [
+        "One row per success criterion with target, actual result and evidence",
+        "Screenshots or query results attached",
+        "Explicit notes where a criterion is partially met"
+      ],
+      "out_of_scope": [
+        "The rollout plan itself, which is S8.4"
+      ],
+      "acceptance": [
+        "All ten criteria have a result and evidence.",
+        "GIVEN criterion #10, WHEN it is recorded, THEN it says precisely whether the metric is available and whether the source moved to system tables - not simply met or not met.",
+        "GIVEN criterion #2, WHEN it is recorded, THEN the approval-state decision from S2.2 is stated.",
+        "Genie failures from S5.3 are included rather than only the successes."
+      ],
+      "notes": [
+        "The acceptance runbook already has a table shaped for this; fill in its last column as the work lands rather than reconstructing it in Week 5."
+      ],
+      "references": [
+        "doc/SDCL_telemetry_acceptance.md - section 4c",
+        "doc/SDCL_telemetry.md - Success Criteria"
+      ],
+      "jira_key": "EP-210",
+      "priority": "High"
+    },
+    {
+      "ref": "S8.4",
+      "parent": "E8",
+      "type": "Story",
+      "summary": "Produce the production rollout recommendation",
+      "labels": [
+        "ep-poc",
+        "enablement"
+      ],
+      "week": "week-5",
+      "owner": "PM",
+      "points": 2,
+      "success_criteria": [],
+      "blocked_by": [
+        "S8.3"
+      ],
+      "context": "The output of the PoC is a decision. If the criteria are met, the timeline says plan production rollout; if they are not, the recommendation should say which gaps would have to close first and what that would cost.",
+      "in_scope": [
+        "A recommendation backed by the S8.3 results",
+        "The measured meeting-preparation saving as the business case",
+        "Known gaps, effort and risks for a production rollout"
+      ],
+      "out_of_scope": [
+        "Executing the rollout"
+      ],
+      "acceptance": [
+        "The recommendation cites the measured numbers from S5.4 and S8.3 rather than the doc's original estimates.",
+        "GIVEN criteria are unmet, WHEN the recommendation is written, THEN it names the gaps and what closing them would take.",
+        "Open decisions - per-person telemetry access, explicit approval action, cost source - are listed as production prerequisites."
+      ],
+      "notes": [
+        "Carry forward the decisions from S2.2, S4.5 and S7.2; they are PoC-acceptable shortcuts that need revisiting for production."
+      ],
+      "references": [
+        "doc/SDCL_telemetry.md - Timeline Week 5"
+      ],
+      "jira_key": "EP-211",
+      "priority": "High"
+    }
+  ],
+  "created_in_jira": {
+    "board": "https://asus-team-cnw.atlassian.net/jira/software/projects/EP/boards/209",
+    "range": "EP-161 .. EP-211",
+    "counts": {
+      "epics": 8,
+      "stories_and_tasks": 43,
+      "story_points": 136
+    },
+    "assignees": "None. Owners named in the source doc are recorded in the ticket descriptions instead."
+  }
+}
