@@ -11,6 +11,7 @@ import {
   SecurityAlertItem,
 } from "@/lib/types";
 import { RateLimitError, DailyLimitError, ValidationError } from "@/lib/api";
+import { track, setAppSession, setWorkflow } from "@/lib/track";
 import {
   createSession,
   startSession,
@@ -86,6 +87,22 @@ interface NetSpecStore {
 }
 
 // ---------------------------------------------------------------------------
+// Telemetry helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a failure into something worth grouping by in a dashboard.
+ * "How often do users hit the daily cap?" is a different question from
+ * "how often does the backend fall over", and the raw message can't answer either.
+ */
+function errorKind(err: unknown): string {
+  if (err instanceof RateLimitError) return "rate_limit";
+  if (err instanceof DailyLimitError) return "daily_limit";
+  if (err instanceof ValidationError) return "validation";
+  return "error";
+}
+
+// ---------------------------------------------------------------------------
 // Zustand store
 // ---------------------------------------------------------------------------
 
@@ -153,9 +170,15 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       rateLimitState: null,
     });
 
+    setWorkflow("text");
+    track("analysis_started", { detail_level: detailLevel, requirement_chars: requirement.length });
+
     try {
       // 1. Create the session
       const { session_id } = await createSession();
+      // Bind every later event in this tab to the backend session, so a click
+      // can be joined to the specification version it produced.
+      setAppSession(session_id);
 
       // 2. Open the SSE stream BEFORE starting the pipeline so we don't miss events
       const es = openEventStream(session_id);
@@ -170,6 +193,9 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
         // Only hard-fail when the connection is truly CLOSED and not yet complete.
         if (es.readyState === EventSource.CLOSED && get().status !== "complete") {
           get()._set({ status: "error", error: "連線中斷，請重試（或重新整理）" });
+          // Only the browser can observe this — the backend never learns its
+          // stream consumer went away.
+          track("stream_disconnected", { at_step: get().activeStep, status: get().status });
         }
       };
 
@@ -193,6 +219,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       } else {
         get()._set({ status: "error", error: err?.message ?? "Failed to start analysis." });
       }
+      track("analysis_start_failed", { reason: errorKind(err), message: err?.message });
     }
   },
 
@@ -205,14 +232,32 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       | { __proceed__: boolean }
       | { __skip__: boolean }
   ) => {
-    const { sessionId, _set } = get();
+    const { sessionId, currentInterruptData, _set } = get();
     if (!sessionId) return;
+
+    // The three shapes this takes ARE three different user decisions: answer the
+    // questions, skip them, or proceed with what's been answered so far. Which one
+    // a user picks (and at which round) is the abandonment signal worth having.
+    const proceed = (answers as { __proceed__?: boolean }).__proceed__ === true;
+    const skipped = (answers as { __skip__?: boolean }).__skip__ === true;
+    const answered = proceed || skipped ? 0 : Object.keys(answers ?? {}).length;
+    track(
+      proceed ? "socratic_proceeded" : skipped ? "socratic_skipped" : "socratic_answered",
+      {
+        round: currentInterruptData?.round ?? null,
+        question_count: (currentInterruptData?.questions ?? []).length,
+        answered_count: answered,
+        clarity_score: currentInterruptData?.clarity_score ?? null,
+        threshold_met: currentInterruptData?.threshold_met ?? null,
+      }
+    );
 
     try {
       _set({ status: "running", currentInterruptType: null, currentInterruptData: null });
       await resumeSession(sessionId, { answers: answers as Record<string, string> });
     } catch (err: any) {
       _set({ status: "error", error: err?.message ?? "Failed to resume session." });
+      track("socratic_resume_failed", { message: err?.message });
     }
   },
 
@@ -237,6 +282,11 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
     const { requirement, currentInterruptData, closeStream, _set } = get();
     if (!requirement) return;
 
+    track("socratic_more_questions_requested", {
+      answered_count: Object.keys(existingAnswers ?? {}).length,
+      covered_dimension_count: (currentInterruptData?.covered_dimensions ?? []).length,
+    });
+
     // Close current stream and start fresh
     closeStream();
 
@@ -259,6 +309,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
     try {
       // Create a new session — pre-load existing answers and covered dimensions
       const { session_id } = await createSession();
+      setAppSession(session_id);
 
       // Open SSE stream before starting
       const es = openEventStream(session_id);
@@ -267,13 +318,14 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
         // (B1) tolerate transient reconnects — only hard-fail when truly CLOSED
         if (es.readyState === EventSource.CLOSED && get().status !== "complete") {
           get()._set({ status: "error", error: "連線中斷，請重試（或重新整理）" });
+          track("stream_disconnected", { at_step: get().activeStep, status: get().status });
         }
       };
 
       _set({ sessionId: session_id, eventSource: es });
 
       // Start with pre-loaded answers from previous session so Socratic asks NEW dimensions
-      const coveredDims = (currentInterruptData as any)?.covered_dimensions ?? [];
+      const coveredDims = currentInterruptData?.covered_dimensions ?? [];
       await fetch(`/api/sessions/${session_id}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -285,6 +337,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       });
     } catch (err: any) {
       get()._set({ status: "error", error: err?.message ?? "Failed to continue." });
+      track("socratic_more_questions_failed", { message: err?.message });
     }
   },
 
@@ -295,6 +348,11 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
     const { sessionId, _set } = get();
     if (!sessionId) return;
 
+    track("search_plan_confirmed", {
+      modified: Boolean(modifiedKeywords?.length),
+      keyword_count: modifiedKeywords?.length ?? 0,
+    });
+
     try {
       _set({ status: "running", currentInterruptType: null, currentInterruptData: null });
       await resumeSession(sessionId, {
@@ -303,6 +361,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       });
     } catch (err: any) {
       _set({ status: "error", error: err?.message ?? "Failed to confirm plan." });
+      track("search_plan_confirm_failed", { message: err?.message });
     }
   },
 
@@ -312,6 +371,12 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
   triggerIteration: async (feedback?: string) => {
     const { sessionId, _set } = get();
     if (!sessionId) return;
+
+    track("spec_iterate_clicked", {
+      from_iteration: get().currentIteration,
+      had_user_direction: Boolean(feedback),
+      feedback_chars: feedback?.length ?? 0,
+    });
 
     try {
       // Immediately show step 7 (PRD generation) so overlay never shows step 1
@@ -329,6 +394,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       } else {
         _set({ status: "error", error: err?.message ?? "優化失敗，請重試。" });
       }
+      track("spec_iterate_request_failed", { reason: errorKind(err), message: err?.message });
     }
   },
 
@@ -339,6 +405,10 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
     const { sessionId, result, currentIteration, roleViewLoading, _set } = get();
     if (!sessionId || !result) return;
     _set({ roleViewLoading: { ...roleViewLoading, [role]: true } });
+    // Deriving a role view is NetSpec's PM-confirmation gate — the closest thing
+    // the product has to "the PM approved this spec".
+    track("role_view_requested", { role, based_on_iteration: currentIteration || 1 });
+    const startedAt = Date.now();
     try {
       const view = await generateRole(sessionId, role, currentIteration || 1);
       const cur = get().result;
@@ -347,9 +417,15 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
         result: { ...cur, role_views: { ...(cur.role_views ?? {}), [role]: view } },
         roleViewLoading: { ...get().roleViewLoading, [role]: false },
       });
+      track("role_view_received", {
+        role,
+        based_on_iteration: currentIteration || 1,
+        duration_ms: Date.now() - startedAt,
+      });
     } catch (err: any) {
       _set({ roleViewLoading: { ...get().roleViewLoading, [role]: false },
              error: err?.message ?? "角色視圖生成失敗" });
+      track("role_view_failed", { role, message: err?.message });
     }
   },
 
@@ -387,8 +463,14 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       }).catch(() => null);
 
       _set({ result, currentIteration: iterNum, cachedTranslation });
+      track("spec_version_viewed", {
+        iteration: iterNum,
+        from_history: Boolean(loadedHistoryId),
+        quality_score: result?.validation_score ?? null,
+      });
     } catch (err: any) {
       _set({ error: err?.message ?? "Failed to load iteration." });
+      track("spec_version_view_failed", { iteration: iterNum, message: err?.message });
     }
   },
 
@@ -415,6 +497,8 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
       // versions to the SAME session/card instead of forking a new one.
       closeStream();
       const sid = histSessionId;
+      setWorkflow("text");
+      setAppSession(sid);
 
       // Open SSE stream RIGHT NOW so iteration events will arrive
       const es = openEventStream(sid);
@@ -423,6 +507,7 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
         // (B1) tolerate transient reconnects — only hard-fail when truly CLOSED
         if (es.readyState === EventSource.CLOSED && get().status !== "complete") {
           get()._set({ status: "error", error: "連線中斷，請重試（或重新整理）" });
+          track("stream_disconnected", { at_step: get().activeStep, status: get().status });
         }
       };
 
@@ -466,9 +551,15 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
           error: null,
           logEntries: [],
         });
+        track("history_session_opened", {
+          version_count: iters.length,
+          latest_iteration: latest.iteration_num,
+          quality_score: result?.validation_score ?? null,
+        });
       }
     } catch (err: any) {
       _set({ error: err?.message ?? "Failed to load history." });
+      track("history_session_open_failed", { message: err?.message });
     }
   },
 
@@ -476,8 +567,12 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
   // resetToHome — logo click: close stream + clear all state → shows onboarding
   // -------------------------------------------------------------------------
   resetToHome: () => {
-    const { eventSource } = get();
+    const { eventSource, status, currentIteration } = get();
     if (eventSource) { eventSource.close(); }
+    // Leaving mid-run is the abandonment signal — record the state it was left in
+    // before it's cleared.
+    track("session_reset", { from_status: status, iteration: currentIteration });
+    setAppSession(null);
     useNetSpecStore.setState({
       sessionId: null,
       status: "idle",
@@ -523,6 +618,11 @@ const useNetSpecStore = create<NetSpecStore>((set, get) => ({
         }
       );
       _set({ cachedTranslation: cache });
+      track("spec_translated", {
+        iteration: currentIteration,
+        target_lang: "en",
+        chars: cache.spec_document?.length ?? 0,
+      });
     } catch {
       // Non-fatal — translation still works, just not persisted
     }
@@ -713,6 +813,13 @@ function handleSSEMessage(ev: MessageEvent, sessionId: string) {
         currentInterruptData: null,
         error: null,
       });
+      track("spec_ready", {
+        quality_score: res?.validation_score ?? null,
+        validation_passed: res?.validation_passed ?? null,
+        detail_level: res?.detail_level ?? null,
+        edge_case_count: (res?.edge_cases ?? []).length,
+        citation_count: (res?.citations ?? []).length,
+      });
       // Refresh iterations list from API — but only replace if it actually has data
       if (sessionId) {
         getSession(sessionId)
@@ -728,6 +835,7 @@ function handleSSEMessage(ev: MessageEvent, sessionId: string) {
 
     case "security_block":
       // Layer 2: attack intent — pipeline blocked
+      track("security_block_shown", { category: parsed.category ?? "attack_intent" });
       _set({
         status: "error",
         error: parsed.message ?? "安全檢查未通過",

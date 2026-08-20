@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 import db as _db
+import telemetry
 from config import get_settings
 from demo_replay import run_demo_pipeline, demo_resume as _demo_resume
 from pipeline import PIPELINE, STEP_LABELS, NetSpecState
@@ -145,6 +146,81 @@ def _check_daily_limit(ip: str, key: str, limit: int) -> None:
 SESSIONS: dict[str, Session] = {}
 
 
+# ── Telemetry helpers ─────────────────────────────────────────────────────────
+# One place that knows how to turn "something happened to this session" into a
+# governed row. Everything session-scoped goes through _emit so the join keys
+# (app_session_id, user_email) are attached the same way every time and no call
+# site can forget them.
+
+def _emit(session: Session, event_name: str, *, duration_ms: int | None = None,
+          properties: dict | None = None, event_type: str = "server_event") -> None:
+    telemetry.track(
+        event_name,
+        event_type=event_type,
+        app_session_id=session.id,
+        user_email=session.user_email,
+        user_id=session.user_id,
+        workflow="text",
+        duration_ms=duration_ms,
+        properties=properties or {},
+    )
+
+
+def _emit_spec_version(session: Session, result: dict, iteration: int, *, origin: str) -> None:
+    """Success criterion #2 — what the app *produced*, as a governed row.
+
+    One row per specification version, carrying the version's identity, quality
+    and approval state, and joinable to the interaction telemetry on
+    app_session_id / user_email. The spec body itself is deliberately absent:
+    it lives in the SQLite database (and its Volume backup); what belongs in the
+    lakehouse is the metadata every cross-system question actually needs.
+    """
+    sections = result.get("spec_sections") or {}
+    role_views = result.get("role_views") or {}
+    _emit(
+        session, "spec_version",
+        event_type="app_output",
+        properties={
+            "spec_id": f"{session.id}:v{iteration}",
+            "iteration": iteration,
+            "origin": origin,                      # pipeline | iterate
+            "feature_name": sections.get("feature_name", ""),
+            "req_type": result.get("req_type", ""),
+            "detail_level": result.get("detail_level", ""),
+            "protocols": result.get("protocols", []),
+            "quality_score": result.get("validation_score", 0),
+            "validation_passed": bool(result.get("validation_passed", False)),
+            "validation_issue_count": len(result.get("validation_issues") or []),
+            "edge_case_count": len(result.get("edge_cases") or []),
+            "citation_count": len(result.get("citations") or []),
+            "spec_chars": len(result.get("spec_document") or ""),
+            "spec_chars_en": len(result.get("spec_document_en") or ""),
+            "approval_state": _approval_state(result),
+            "derived_role_views": sorted(role_views.keys()),
+        },
+    )
+
+
+def _approval_state(result: dict) -> str:
+    """NetSpec's approval gate, expressed as an enum.
+
+    NetSpec has no explicit "Approve" button today. What it has is the PM-first
+    gate described in the README: a PM confirms the PM spec, and only then are
+    the architect / QA views derived from it. So a version that has derived role
+    views has been accepted by a human in the only way the product currently
+    expresses acceptance, and a version that passed validation without that
+    step is a candidate awaiting one.
+
+    Kept as a single function so that, when an explicit approval action is added
+    to the product, only this mapping changes.
+    """
+    if result.get("role_views"):
+        return "approved_derived"          # PM confirmed → role views derived
+    if result.get("validation_passed"):
+        return "pending_approval"          # passed validation, no human gate yet
+    return "draft"
+
+
 # ── Agent thought generator ────────────────────────────────────────────────────
 
 def _get_step_model(node_name: str) -> str:
@@ -198,6 +274,8 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
     future events without re-opening the EventSource.
     """
     is_interrupt = False
+    # Per-run, not module-level: two sessions can be in the same node at once.
+    _step_started_at: dict[str, float] = {}
     try:
         session.status = "running"
         session.interrupt_type = None
@@ -220,6 +298,9 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
                 })
                 session.status = "error"
                 session.error  = a.message
+                _emit(session, "security_blocked", properties={
+                    "category": a.category, "detected_count": len(a.detected or []),
+                })
                 _daily_dec(session.client_ip, "start")   # blocked before any LLM spend → refund the daily quota
                 await session.queue.put({"type": "__done__"})
                 return
@@ -235,6 +316,10 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
                     ],
                     "masked_requirement": sec.clean_text,
                 })
+                _emit(session, "security_warned", properties={
+                    "warning_count": len(sec.warnings),
+                    "categories": [w.category for w in sec.warnings],
+                })
                 # Patch the requirement with the sanitised version
                 if isinstance(input_val, dict):
                     input_val = {**input_val, "requirement": sec.clean_text}
@@ -248,6 +333,11 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
                 meta        = STEP_LABELS[name]
                 state_input = event.get("data", {}).get("input", {}) or {}
                 thought     = _make_thought(name, state_input)
+                _step_started_at[name] = time.time()
+                _emit(session, "pipeline_step_started", properties={
+                    "node": name, "step": meta["step"], "title": meta["title"],
+                    "phase": meta["phase"], "model": _get_step_model(name),
+                })
                 await session.queue.put({
                     "type":    "step_start",
                     "node":    name,
@@ -264,6 +354,14 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
                 logs       = output.get("log", [])
                 last_log   = logs[-1]["message"] if logs else ""
                 tool_calls = output.get("_tool_calls", [])
+                started    = _step_started_at.pop(name, None)
+                _emit(session, "pipeline_step_completed",
+                      duration_ms=int((time.time() - started) * 1000) if started else None,
+                      properties={
+                          "node": name, "step": meta["step"], "title": meta["title"],
+                          "phase": meta["phase"], "model": _get_step_model(name),
+                          "tool_call_count": len(tool_calls),
+                      })
                 await session.queue.put({
                     "type":       "step_complete",
                     "node":       name,
@@ -289,6 +387,13 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
             session.interrupt_type = itype
             session.interrupt_data = interrupt_value
             is_interrupt = True  # ← tell finally NOT to send __done__
+            _emit(session, "pipeline_interrupted", properties={
+                "interrupt_type": itype,
+                "round": interrupt_value.get("round"),
+                "question_count": len(interrupt_value.get("questions") or []),
+                "clarity_score": interrupt_value.get("clarity_score"),
+                "threshold_met": interrupt_value.get("threshold_met"),
+            })
             await session.queue.put({
                 "type": "interrupt",
                 "interrupt_type": itype,
@@ -322,12 +427,27 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
             except Exception as db_err:
                 print(f"[DB] save failed (non-fatal): {db_err}")
             # ──────────────────────────────────────────────────────────────
+            # Outside the try above on purpose: a SQLite failure must not also
+            # cost us the governed row, which is the more durable record.
+            _emit_spec_version(session, result, len(session.iterations), origin="pipeline")
+            _emit(session, "pipeline_completed",
+                  duration_ms=int((time.time() - session.created_at) * 1000),
+                  properties={
+                      "quality_score": result.get("validation_score", 0),
+                      "validation_passed": result.get("validation_passed", False),
+                      "detail_level": result.get("detail_level", ""),
+                      "scraped_count": result.get("scraped_count", 0),
+                      "edge_case_count": len(result.get("edge_cases") or []),
+                  })
             await session.queue.put({"type": "complete", "result": result})
 
     except Exception as exc:
         print(f"[pipeline] session={session.id} failed: {type(exc).__name__}: {exc}")
         session.status = "error"
         session.error = str(exc)
+        _emit(session, "pipeline_failed", properties={
+            "error_type": type(exc).__name__, "error": str(exc)[:200],
+        })
         await session.queue.put({"type": "error", "message": str(exc)})
     finally:
         # Only close the SSE connection for terminal states (complete / error).
@@ -338,10 +458,14 @@ async def _stream_pipeline(session: Session, input_val: Any, config: dict) -> No
 
 async def _run_pipeline(session: Session, initial_state: dict, config: dict) -> None:
     cfg = get_settings()
-    if cfg.demo_mode:
-        await run_demo_pipeline(session, cfg)
-        return
-    await _stream_pipeline(session, initial_state, config)
+    # Bind once here, around everything the run does — the llm_call cost events
+    # emitted from inside llm_client pick the session up from this context.
+    with telemetry.bind_context(app_session_id=session.id, user_email=session.user_email,
+                                user_id=session.user_id, workflow="text"):
+        if cfg.demo_mode:
+            await run_demo_pipeline(session, cfg)
+            return
+        await _stream_pipeline(session, initial_state, config)
 
 
 async def _resume_pipeline(session: Session, resume_value: Any, config: dict) -> None:
@@ -352,7 +476,9 @@ async def _resume_pipeline(session: Session, resume_value: Any, config: dict) ->
     Replacing it would cause a 30-second blind spot until the wait_for times out.
     The previous pipeline run already sent __done__ to close the old stream cleanly.
     """
-    await _stream_pipeline(session, Command(resume=resume_value), config)
+    with telemetry.bind_context(app_session_id=session.id, user_email=session.user_email,
+                                user_id=session.user_id, workflow="text"):
+        await _stream_pipeline(session, Command(resume=resume_value), config)
 
 
 def _build_result(state: dict) -> dict:
@@ -428,7 +554,14 @@ class ResumeRequest(BaseModel):
 async def create_session(request: Request) -> dict:
     _rl(request, "sessions")
     session_id = str(uuid.uuid4())
-    SESSIONS[session_id] = Session(session_id)
+    session = Session(session_id)
+    # Bind the acting user to the session now, while the request headers still
+    # exist — every later event on this session is attributed from here.
+    ident = telemetry.identity_from(request)
+    session.user_email = ident.get("user_email")
+    session.user_id = ident.get("user_id")
+    SESSIONS[session_id] = session
+    _emit(session, "session_created")
     return {
         "session_id": session_id,
         "stream_url": f"/api/sessions/{session_id}/stream",
@@ -491,6 +624,14 @@ async def start_session(request: Request, session_id: str, body: StartRequest, b
         "log": [],
         "error": None,
     }
+
+    _emit(session, "pipeline_started", properties={
+        "detail_level": detail_level,
+        "requirement_chars": len(body.requirement or ""),
+        "preloaded_answer_count": len(body.initial_answers or {}),
+        "preloaded_dimension_count": len(body.initial_covered_dimensions or []),
+        "demo_mode": get_settings().demo_mode,
+    })
 
     config = {"configurable": {"thread_id": session_id}}
     background_tasks.add_task(_run_pipeline, session, initial_state, config)
@@ -661,6 +802,17 @@ class IterateRequest(BaseModel):
 
 
 async def _run_iteration(session: Session, feedback: Optional[str]) -> None:
+    """Bind this session's telemetry context, then run the iteration.
+
+    Same shape as _run_pipeline: everything the run emits — including the
+    llm_call cost events from inside llm_client — picks the session up from here.
+    """
+    with telemetry.bind_context(app_session_id=session.id, user_email=session.user_email,
+                                user_id=session.user_id, workflow="text"):
+        await _run_iteration_inner(session, feedback)
+
+
+async def _run_iteration_inner(session: Session, feedback: Optional[str]) -> None:
     """Re-generate PRD + Validate using validation issues as improvement context.
     Does NOT re-run scraping or edge case detection — only Steps 7+8.
     """
@@ -914,6 +1066,15 @@ async def _run_iteration(session: Session, feedback: Optional[str]) -> None:
             print(f"[DB] iterate save failed (non-fatal): {db_err}")
         # ──────────────────────────────────────────────────────────────────
 
+        # Outside the try above on purpose — see the note in _stream_pipeline.
+        _emit_spec_version(session, new_result, iter_num, origin="iterate")
+        _emit(session, "spec_iterated", properties={
+            "iteration": iter_num,
+            "quality_score": score,
+            "validation_passed": passed,
+            "had_user_direction": bool(feedback),
+            "issue_count": len(carried_issues),
+        })
         await session.queue.put({
             "type": "iterate_complete",
             "iteration": iter_num,
@@ -926,6 +1087,9 @@ async def _run_iteration(session: Session, feedback: Optional[str]) -> None:
         print(f"[iterate] session={session.id} failed: {type(exc).__name__}: {exc}")
         session.status = "error"
         session.error = str(exc)
+        _emit(session, "spec_iterate_failed", properties={
+            "error_type": type(exc).__name__, "error": str(exc)[:200],
+        })
         await session.queue.put({"type": "error", "message": str(exc)})
     finally:
         await session.queue.put({"type": "__done__"})
@@ -1033,6 +1197,17 @@ async def generate_role(request: Request, session_id: str, body: GenerateRoleReq
         )
     except Exception as db_err:
         print(f"[DB] role view persist failed (non-fatal): {db_err}")
+
+    # Deriving a role view is NetSpec's PM-confirmation gate (see _approval_state),
+    # so this is both a usage event and a change in the spec's approval state.
+    _emit(session, "role_view_generated", event_type="app_output", properties={
+        "spec_id": f"{session.id}:v{based_on}",
+        "role": role,
+        "based_on_iteration": based_on,
+        "feature_name": spec_sections.get("feature_name", ""),
+        "document_chars": len(view.get("document", "") or ""),
+    })
+    _emit_spec_version(session, result, based_on, origin="role_view")
 
     return {"role": role, **role_views[role]}
 
@@ -1206,6 +1381,55 @@ async def delete_history_session(session_id: str) -> dict:
 #    security-reload/demo-mode — all genuinely text-spec-exclusive or
 #    naturally per-service now that this runs standalone) ────────────────────
 
+# ── App telemetry ─────────────────────────────────────────────────────────────
+
+class TelemetryEvent(BaseModel):
+    """One semantic interaction. Mirrors the payload track.ts sends."""
+    event_name: str
+    event_time: Optional[str] = None
+    page: Optional[str] = None
+    session_id: Optional[str] = None        # browser session (sessionStorage)
+    app_session_id: Optional[str] = None    # NetSpec pipeline session — the join key
+    workflow: Optional[str] = None
+    properties: dict = {}
+
+
+class TelemetryBatch(BaseModel):
+    events: list[TelemetryEvent] = []
+
+
+@router.post("/events")
+async def receive_events(batch: TelemetryBatch, request: Request) -> dict:
+    """Accept interaction events and write them to the governed telemetry stream.
+
+    The frontend app owns the authoritative /api/events (it sees the browser's
+    request directly, so its X-Forwarded-Email is the real human). This endpoint
+    is the service-side twin: it exists so the backend has the same single
+    telemetry surface, so events can be posted straight at a service when
+    debugging a deploy, and so identity relayed by the frontend proxy is honoured
+    ahead of whatever principal this hop authenticated as.
+
+    There is no authentication code here — the platform has already identified
+    the caller by the time the request arrives.
+    """
+    ident = telemetry.resolve_identity(request)
+    for event in batch.events[:100]:   # bound one request
+        telemetry.track(
+            event.event_name,
+            event_type="ui_interaction",
+            event_time=event.event_time,
+            page=event.page,
+            workflow=event.workflow,
+            session_id=event.session_id,
+            app_session_id=event.app_session_id,
+            user_email=ident.get("user_email"),
+            user_id=ident.get("user_id"),
+            request_id=ident.get("request_id"),
+            properties=event.properties or {},
+        )
+    return {"accepted": True, "count": len(batch.events[:100])}
+
+
 @router.get("/health")
 async def health():
     s = get_settings()
@@ -1235,6 +1459,7 @@ async def health():
         "demo_mode": s.demo_mode,
         "db_path": str(_db.DB_PATH),
         "volume_sync": _db.sync_diag,
+        "telemetry": telemetry.diagnostics(),
     }
 
 

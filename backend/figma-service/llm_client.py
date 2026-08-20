@@ -32,10 +32,45 @@ _usage_records: list[dict] = []
 
 
 def _record_usage(tool_name: str, model: str, in_tok, out_tok) -> None:
+    in_tok, out_tok = int(in_tok or 0), int(out_tok or 0)
     _usage_records.append({
         "tool": tool_name, "model": model,
-        "input_tokens": int(in_tok or 0), "output_tokens": int(out_tok or 0),
+        "input_tokens": in_tok, "output_tokens": out_tok,
     })
+    _emit_cost_event(tool_name, model, in_tok, out_tok)
+
+
+def _emit_cost_event(tool_name: str, model: str, in_tok: int, out_tok: int) -> None:
+    """Success criterion #10 — AI development cost, attributable by SDLC stage.
+
+    This is the one choke point every model call already passes through, so the
+    whole pipeline is covered without touching a single call site. cost.py owns
+    both halves of the mapping: tool name -> pipeline step, and model -> price.
+
+    Once model calls route through the Databricks-hosted Anthropic endpoint the
+    platform system tables carry authoritative token counts and spend; what they
+    cannot know is which SDLC stage a call belongs to, and that is exactly what
+    the `step` here supplies. Until that migration, this event is also the only
+    source of the numbers.
+    """
+    try:
+        import telemetry
+        from cost import STEP_BY_TOOL, _price_for
+        price_in, price_out = _price_for(model)
+        cost_usd = in_tok / 1_000_000 * price_in + out_tok / 1_000_000 * price_out
+        telemetry.track_llm_call(
+            tool=tool_name,
+            model=model,
+            step=STEP_BY_TOOL.get(tool_name, tool_name),
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost_usd,
+            price_input_per_1m=price_in,
+            price_output_per_1m=price_out,
+        )
+    except Exception:
+        # Cost telemetry must never break an LLM call.
+        pass
 
 
 def get_usage_records() -> list[dict]:

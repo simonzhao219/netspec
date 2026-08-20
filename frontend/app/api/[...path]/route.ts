@@ -59,6 +59,15 @@ async function proxy(req: NextRequest, path: string[]) {
   if (ct) headers.set("content-type", ct);
   if (token) headers.set("authorization", `Bearer ${token}`);
 
+  // Relay the platform-injected identity so backend telemetry can attribute
+  // server-side events (pipeline steps, spec versions, token cost) to the human
+  // who triggered them. Without this the backends would only ever see whichever
+  // principal THIS hop authenticated as, not the logged-in user.
+  for (const h of ["x-forwarded-email", "x-forwarded-user", "x-forwarded-preferred-username", "x-request-id"]) {
+    const v = req.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+
   const hasBody = !["GET", "HEAD"].includes(req.method);
   const upstream = await fetch(target, {
     method: req.method,

@@ -54,6 +54,34 @@ def _load_databricks_secrets() -> None:
 
 _load_databricks_secrets()
 
+def _load_telemetry_env() -> None:
+    """Make TELEMETRY_* work the same locally as it does on Databricks Apps.
+
+    On Databricks these come from app.yaml and are real process environment
+    variables. Locally they live in backend/.env — but that file is read by
+    pydantic-settings into the Settings object, which never touches os.environ,
+    and telemetry.py reads os.environ (deliberately: it has no dependency on the
+    app's config). Bridging just these keys keeps a developer from setting them
+    in .env and watching nothing happen.
+
+    Real environment variables always win, so app.yaml is never overridden.
+    """
+    try:
+        from dotenv import dotenv_values
+        for key, value in dotenv_values(".env").items():
+            if key.startswith("TELEMETRY_") and value and not os.environ.get(key):
+                os.environ[key] = value
+    except Exception:
+        pass
+
+
+_load_telemetry_env()
+
+# Label every telemetry row with which process emitted it. app.yaml (or .env)
+# normally sets this; defaulting here means a local run, or a forgotten env var,
+# still produces correctly-attributed rows rather than "unknown-service".
+os.environ.setdefault("TELEMETRY_SERVICE_NAME", "figma-service")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -69,6 +97,8 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(restore_from_volume)
     init_db()
     print("✅ figma-service SQLite DB ready (netspec_figma.db)")
+    import telemetry
+    telemetry.track("service_started", properties=telemetry.diagnostics())
     settings = get_settings()
     if not settings.anthropic_api_key:
         print("⚠️  WARNING: ANTHROPIC_API_KEY not set. Set it in figma-service/.env")
@@ -99,6 +129,13 @@ async def lifespan(app: FastAPI):
     flush_task.cancel()
     try:
         await asyncio.to_thread(backup_to_volume)
+    except Exception:
+        pass
+    # Drain any telemetry still buffered for the Delta sink. stdout already has
+    # every event; this is only about the optional direct-write path.
+    try:
+        telemetry.track("service_stopping")
+        await asyncio.to_thread(telemetry.shutdown)
     except Exception:
         pass
 

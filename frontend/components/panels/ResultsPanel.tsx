@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { SpecResult, Citation, EdgeCase, DisasterPattern, IssueDelta } from "@/lib/types";
 import { useNetSpec } from "@/hooks/useNetSpec";
+import { track } from "@/lib/track";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Props
@@ -1072,6 +1073,14 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
       const sel = `請優先修正以下驗證問題：\n${picked.join("\n")}`;
       note = note ? `${sel}\n\n另外：${note}` : sel;
     }
+    // Which validation issues a user chooses to fix — and how many they ignore —
+    // is what tells us whether the validator is pointing at the right things.
+    track("iterate_submitted", {
+      selected_issue_count: selectedIssues.size,
+      total_issue_count: result.validation_issues?.length ?? 0,
+      free_text_chars: feedback.trim().length,
+      from_iteration: currentIteration,
+    });
     onIterate(note || undefined);
     // Don't clear feedback — user may want to iterate again with same direction
   };
@@ -1087,6 +1096,7 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
 
   const handleLangToggle = async (target: "zh" | "en") => {
     if (target === lang) return;
+    track("language_toggled", { from: lang, to: target, cached: Boolean(enSpec) });
 
     if (target === "en") {
       // Already cached → instant switch
@@ -1316,7 +1326,7 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
             {/* 精簡檢視 toggle（純前端：摺疊邊界/社群/開放問題，方便快速閱讀與交付） */}
             <button
               type="button"
-              onClick={() => setCompactView(v => !v)}
+              onClick={() => { track("compact_view_toggled", { enabled: !compactView }); setCompactView(v => !v); }}
               className="rounded-lg px-2.5 py-[5px] text-[11.5px] font-medium transition-all"
               style={compactView
                 ? { background: "rgba(107,92,240,0.1)", color: "#6B5CF0", border: "1px solid rgba(107,92,240,0.25)" }
@@ -1329,7 +1339,10 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
             {/* Print / export full spec */}
             <button
               type="button"
-              onClick={() => printSpec(activeDoc, featureTitle, result.req_type)}
+              onClick={() => {
+                track("spec_printed", { view: activeView, iteration: currentIteration, lang, chars: activeDoc.length });
+                printSpec(activeDoc, featureTitle, result.req_type);
+              }}
               title="列印 / 匯出 PDF（目前檢視的文件）"
               className="rounded-lg px-2.5 py-[5px] text-[11.5px] font-medium transition-colors hover:bg-black/[0.05]"
               style={{ color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))" }}
@@ -1341,6 +1354,10 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
             <button
               type="button"
               onClick={() => {
+                track("spec_exported", {
+                  format: "md", view: activeView, iteration: currentIteration,
+                  lang, chars: activeDoc.length,
+                });
                 const blob = new Blob([activeDoc], { type: "text/markdown;charset=utf-8" });
                 const a = document.createElement("a");
                 a.href = URL.createObjectURL(blob);
@@ -1470,7 +1487,10 @@ export function ResultsPanel({ result, currentIteration, onIterate, status, erro
               <button
                 key={v}
                 type="button"
-                onClick={() => setActiveView(v)}
+                onClick={() => {
+                  track("role_view_switched", { from: activeView, to: v, already_generated: v === "pm" || generated });
+                  setActiveView(v);
+                }}
                 className="text-[12px] font-medium px-3 py-[5px] rounded-[7px] transition-all select-none inline-flex items-center gap-1.5"
                 style={{
                   background: activeView === v ? "#fff" : "transparent",
